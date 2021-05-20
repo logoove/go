@@ -3,10 +3,12 @@ package php
 
 import (
 	"fmt"
+	"golang.org/x/sys/windows"
 	"syscall"
 )
 func init(){
 	WinColor=WinColors
+	GetLangs=GetLangss
 }
 /**
  * @Description: 支持windows设置颜色
@@ -41,5 +43,9 @@ func WinColors(s string, i1 string){
 		handle, _, _ = proc.Call(uintptr(syscall.Stdout), uintptr(7))
 		CloseHandle := kernel32.NewProc("CloseHandle")
 		CloseHandle.Call(handle)
+}
+func GetLangss()string{
+	s,_:=windows.GetUserPreferredUILanguages(8)
+	return s[0]
 }
 

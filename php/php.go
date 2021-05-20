@@ -821,6 +821,21 @@ func Color(str string, color1 string, extraArgs ...interface{}){
 		WinColor(str,color1)
 	}
 }
+//获取系统语言
+var GetLangs func()string
+func GetLang()string{
+	if runtime.GOOS != "windows"{
+		s:=os.Getenv("LANG")
+		if s=="zh_CN.UTF-8"{
+			return "zh-CN"
+		}else{
+			return "en-US"
+		}
+	}else{
+		return GetLangs()
+	}
+
+}
 
 /**
  * @Description: 获取本地IP 返回切片
