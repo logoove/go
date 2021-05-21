@@ -36,6 +36,47 @@ import (
 	"time"
 	"unicode/utf8"
 )
+//字典类型
+type (
+	Map        = map[string]interface{}
+	MapAnyAny  = map[interface{}]interface{}
+	MapAnyStr  = map[interface{}]string
+	MapAnyInt  = map[interface{}]int
+	MapStrAny  = map[string]interface{}
+	MapStrStr  = map[string]string
+	MapStrInt  = map[string]int
+	MapIntAny  = map[int]interface{}
+	MapIntStr  = map[int]string
+	MapIntInt  = map[int]int
+	MapAnyBool = map[interface{}]bool
+	MapStrBool = map[string]bool
+	MapIntBool = map[int]bool
+)
+
+//字典组成的切片类型
+type (
+	List        = []Map
+	ListAnyAny  = []MapAnyAny
+	ListAnyStr  = []MapAnyStr
+	ListAnyInt  = []MapAnyInt
+	ListStrAny  = []MapStrAny
+	ListStrStr  = []MapStrStr
+	ListStrInt  = []MapStrInt
+	ListIntAny  = []MapIntAny
+	ListIntStr  = []MapIntStr
+	ListIntInt  = []MapIntInt
+	ListAnyBool = []MapAnyBool
+	ListStrBool = []MapStrBool
+	ListIntBool = []MapIntBool
+)
+
+//切片类型
+type (
+	Slice    = []interface{}
+	SliceAny = []interface{}
+	SliceStr = []string
+	SliceInt = []int
+)
 /**
  * @Description: 当前时间戳
  * @return int64
