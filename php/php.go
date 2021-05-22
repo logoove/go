@@ -1710,3 +1710,4 @@ func GetPinyin(s,sp string)(pinyin,shortpinyin string){
 	}
 	return pinyin,shortpinyin
 }
+
