@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -223,21 +224,6 @@ func FileCount(sizes uint64)(string){
 func Uniqid(prefix string) string {
 	now := time.Now()
 	return fmt.Sprintf("%s%08x%05x", prefix, now.Unix(), now.UnixNano()%0x100000)
-}
-/**
- * @Description: 结构体转换字典map
- * @param obj 结构体
- * @return map[string]interface{}
- */
-func Struct2Map(obj interface{}) map[string]interface{} {
-	t := reflect.TypeOf(obj)
-	v := reflect.ValueOf(obj)
-
-	var data = make(map[string]interface{})
-	for i := 0; i < t.NumField(); i++ {
-		data[t.Field(i).Name] = v.Field(i).Interface()
-	}
-	return data
 }
 /**
  * @Description: 类型判断
@@ -1709,5 +1695,90 @@ func GetPinyin(s,sp string)(pinyin,shortpinyin string){
 		
 	}
 	return pinyin,shortpinyin
+}
+/**
+ * @Description: 切片按个数分割,用于表格输出时候
+ * @param s 切片
+ * @param j 要分割数量
+ * @return a 切片
+ */
+func SliceSplit(s9 []string,jj int)(aa [][]string){
+	lens:=len(s9)
+	for ii:=0;ii<int(math.Ceil(float64(len(s9))/float64(jj)));ii++{
+		start:=ii*jj
+		end:=start+jj
+		if end>lens{
+			end=lens
+		}
+		aa = append(aa,s9[start:end])
+	}
+	return aa
+}
+/**
+ * @Description:任意类型map转换成字符串map
+ * @param m
+ * @return map[string]string
+ */
+func Mapany2str(m map[string]interface{}) map[string]string {
+	ret := make(map[string]string, len(m))
+	for k, v := range m {
+		ret[k] = fmt.Sprint(v)
+	}
+	return ret
+}
+/**
+ * @Description: 结构体转换字典map
+ * @param obj 结构体
+ * @return map[string]interface{}
+ */
+func Struct2Map(obj interface{}) map[string]interface{} {
+	t := reflect.TypeOf(obj)
+	v := reflect.ValueOf(obj)
+
+	var data = make(map[string]interface{})
+	for i := 0; i < t.NumField(); i++ {
+		data[t.Field(i).Name] = v.Field(i).Interface()
+	}
+	return data
+}
+/**
+ * @Description: json字符串转换任意类型map,用于处理复杂嵌套json
+ * @param str
+ * @return map[string]interface{}
+ */
+func Json2Map(str string)map[string]interface{}{
+	var temp=make(map[string]interface{})
+	json.Unmarshal([]byte(str), &temp)
+	return temp
+}
+//map转换结构体
+/*var ss map[string]interface{}
+type sc struct{
+	Id int
+}
+var tempMap sc
+arr1,_ := json.Marshal(ss)
+json.Unmarshal(arr1,&tempMap)
+*/
+/**
+ * @Description: 切片索引处插入一个元素
+ * @param sl 切片
+ * @param vv 元素
+ * @param ii 索引
+ * @return []string
+ */
+func sliceInsertStr(sl []string,vv string,ii int)[]string{
+	var rear=make([]string,0);
+	rear=append(rear ,sl[ii:]...)
+	sl=append(sl[0:ii],vv)
+	sl=append(sl,rear...)
+	return sl
+}
+func sliceInsertInt(sl []int,vv int,ii int)[]int{
+	var rear=make([]int,0);
+	rear=append(rear ,sl[ii:]...)
+	sl=append(sl[0:ii],vv)
+	sl=append(sl,rear...)
+	return sl
 }
 
