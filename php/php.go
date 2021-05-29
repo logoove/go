@@ -13,11 +13,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"golang.org/x/crypto/bcrypt"
-	"golang.org/x/text/encoding/simplifiedchinese"
 	"html"
 	"io"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"net"
@@ -244,19 +241,8 @@ func ReadFile(path string)string{
 		panic(err)
 	}
 	defer file.Close()
-
-	bufReader := bufio.NewReader(file)
-	var i = 0
-	s:=""
-	for{
-		i++
-		line,err := bufReader.ReadString(';')
-		s+=line
-		if err == io.EOF {
-			break
-		}
-	}
-	return s
+	s,_:=io.ReadAll(file)
+	return string(s)
 }
 /**
  * @Description: 判断元素是否在数组,切片,字典中
@@ -301,9 +287,9 @@ func Round(value float64,n int) float64 {
  * @return string
  */
 func Utf2Gbk(str string) string {
-	ret, _ := simplifiedchinese.GBK.NewEncoder().String(str)
+	ret, _ := GBK.NewEncoder().String(str)
 	return ret
-	b, _ := simplifiedchinese.GBK.NewEncoder().Bytes([]byte(str))
+	b, _ := GBK.NewEncoder().Bytes([]byte(str))
 	return string(b)
 }
 /**
@@ -312,9 +298,9 @@ func Utf2Gbk(str string) string {
  * @return string
  */
 func Gbk2Utf8(gbkStr string) string {
-	ret, _ := simplifiedchinese.GBK.NewDecoder().String(gbkStr)
+	ret, _ := GBK.NewDecoder().String(gbkStr)
 	return ret
-	b, _ := simplifiedchinese.GBK.NewDecoder().Bytes([]byte(gbkStr))
+	b, _ := GBK.NewDecoder().Bytes([]byte(gbkStr))
 	return string(b)
 }
 /**
@@ -347,11 +333,19 @@ func FileSize(file string) (uint64, error) {
  * @Description: 写文件
  * @param filename 文件名
  * @param data []byte("我爱你12345")
+isadd true追加 false 覆盖
  * @return error
  */
-func WriteFile(filename string, data []byte) error {
+func WriteFile(filename string, data []byte,isadd bool){
 	os.MkdirAll(path.Dir(filename), os.ModePerm)
-	return ioutil.WriteFile(filename, data, 0655)
+	var fs *os.File
+	if isadd==true{//追加
+		fs,_= os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	}else{
+		fs,_= os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	}
+	fs.Write(data)
+	fs.Close()
 }
 /**
  * @Description: 判断是否文件,不存在也返回否
@@ -575,8 +569,9 @@ func Sha1(str string) string {
  * @return error
  */
 func PasswordHash(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	return string(bytes), err
+	salt, _ := Salt(10)
+	hash, err := Hash(password,salt)
+	return hash, err
 }
 /**
  * @Description: 验证密码,密码和密码散列
@@ -585,8 +580,8 @@ func PasswordHash(password string) (string, error) {
  * @return bool
  */
 func PasswordVerify(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
+	is:=Match(password, hash)
+	return is
 }
 /**
  * @Description: 四舍五入,分割字符
@@ -1449,7 +1444,7 @@ s:=php.Img2Base64(filename)
 func Img2Base64(filename string)(s string){
 	ext:= filepath.Ext(filename)
 	ext=strings.TrimLeft(ext,".")
-	srcByte, _ := ioutil.ReadFile(filename)
+	srcByte, _ := os.ReadFile(filename)
 	s=Base64Encode(string(srcByte),false)
 	s="data:image/"+ext+";base64,"+s;
 	return
@@ -1468,7 +1463,7 @@ func Base642Img(path,data string)(ps string){
 	CreateDir(path)
 	ps=path+"/"+Sha1(data)+"."+ext
 	bs = Base64Decode(bs,false)
-	ioutil.WriteFile(ps, []byte(bs), 0666)
+	os.WriteFile(ps, []byte(bs), 0666)
 	return ps
 }
 /**
