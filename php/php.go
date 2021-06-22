@@ -1776,4 +1776,17 @@ func sliceInsertInt(sl []int,vv int,ii int)[]int{
 	sl=append(sl,rear...)
 	return sl
 }
+/**
+ * @Description: 获取系统根目录
+ * @return string win返回 C:注意加 \\ linux 返回 /root
+ */
+func Getosdir()string{
+var dir string
+if runtime.GOOS=="windows"{
+	dir="C:"
+}else{
+	dir=os.Getenv("HOME")
+}
+return dir
+}
 
