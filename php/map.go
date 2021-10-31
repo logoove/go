@@ -37,7 +37,7 @@ func (e *Element) Next() *Element {
 func (e *Element) Prev() *Element {
 	return newElement(e.element.Prev())
 }
-func Map() *Map2 {
+func NewMap() *Map2 {
 	return &Map2{
 		kv: make(map[interface{}]*list.Element),
 		ll: list.New(),
@@ -135,7 +135,7 @@ func (m *Map2) Back() *Element {
 	}
 }
 func (m *Map2) Copy() *Map2 {
-	m2 := Map()
+	m2 := NewMap()
 
 	for el := m.Front(); el != nil; el = el.Next() {
 		m2.Set(el.Key, el.Value)
