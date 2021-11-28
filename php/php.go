@@ -1762,14 +1762,14 @@ json.Unmarshal(arr1,&tempMap)
  * @param ii 索引
  * @return []string
  */
-func sliceInsertStr(sl []string,vv string,ii int)[]string{
+func SliceInsertStr(sl []string,vv string,ii int)[]string{
 	var rear=make([]string,0);
 	rear=append(rear ,sl[ii:]...)
 	sl=append(sl[0:ii],vv)
 	sl=append(sl,rear...)
 	return sl
 }
-func sliceInsertInt(sl []int,vv int,ii int)[]int{
+func SliceInsertInt(sl []int,vv int,ii int)[]int{
 	var rear=make([]int,0);
 	rear=append(rear ,sl[ii:]...)
 	sl=append(sl[0:ii],vv)
@@ -1789,4 +1789,35 @@ if runtime.GOOS=="windows"{
 }
 return dir
 }
-
+//
+//  utf82unicode
+//  @Description: utf8转换unnicode
+//  @param str
+//  @return string unicode
+//
+func Utf82unicode(str string)string{
+	str1 := strconv.QuoteToASCII(str)
+	return str1[1 : len(str1)-1]
+}
+//
+//  unicode2utf8
+//  @Description: unicode转换utf8
+//  @param str
+//  @return string utf8
+//
+func Unicode2utf8(str string)string{
+	str1, _ := strconv.Unquote(strings.Replace(strconv.Quote(str), `\\u`, `\u`, -1))
+	return str1
+}
+//  @Description: 去除切片重复元素
+func ArrayUnique(l []string) []string {
+	result := make([]string, 0, len(l))
+	temp := map[string]struct{}{}
+	for _, item := range l {
+		if _, ok := temp[item]; !ok {
+			temp[item] = struct{}{}
+			result = append(result, item)
+		}
+	}
+	return result
+}
