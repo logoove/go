@@ -1,3 +1,3 @@
-﻿module github.com/logoove/go
+module github.com/logoove/go
 
 go 1.18
