@@ -57,15 +57,34 @@ app := cli.NewApp()
 package main
 import (
     "fmt"
-    r "github.com/logoove/go/rest"
+    "github.com/logoove/go/rest"
 )
 
 func main() {
-r.DontCheckRequestMethod = true
-    r.HandleGET("/", func() string {
-        return "<!doctype html><p>Hello World, 中国!"
-    })
-    r.RunServer("0.0.0.0:8080", make(chan struct{}))
+r := rest.New()
+	r.Use(rest.CORS())
+	r.LoadHTMLGlob("test/templates/*")
+	r.Static("/static/", "test/static")
+	r.GET("/json", func(c *rest.Context) {
+		c.JSON(http.StatusOK, rest.H{"name": "中国"})
+	})
+	r.GET("/", func(c *rest.Context) {
+		c.String(200, "Hi welcome 中国")
+	})
+	r.GET("/hello/:name", func(c *rest.Context) {
+		c.String(200, c.Param("name")) //?name=qq 用c.Query("name")
+	})
+	v1 := r.Group("/v1")
+	{
+		v1.GET("/ht", func(c *rest.Context) {
+			c.HTML(http.StatusOK, "css.tmpl", nil)
+		})
+	}
+	v2 := r.Group("/v2")
+	v2.GET("/s", rest.BasicAuth(func(c *rest.Context) {
+		c.String(200, "Hi welcome 密码")
+	}, "admin", "1234"))
+	r.Run("0.0.0.0:8080")
 }
 ```
 

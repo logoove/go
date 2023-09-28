@@ -1,352 +1,408 @@
-/**
-一个简单的go框架，复制的是github开源，并非自己写的
-20230831
-**/
 package rest
 
 import (
-	"bytes"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
-	"io/ioutil"
+	"html/template"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
-	"os"
-	"reflect"
-	"strconv"
+	"path"
+	"runtime"
 	"strings"
+	"time"
 )
 
-var (
-	IndentJSON string
-	Log = log.Println
-	DontCheckRequestMethod bool
-)
-func HandleGET(path string, handler interface{}, object ...interface{}) {
-	handlerFunc, in, out := getHandlerFunc(handler, object)
-	httpHandler := &httpHandler{
-		method:      "GET",
-		handlerFunc: handlerFunc,
-	}
-	switch len(in) {
-	case 0:
-		httpHandler.getArgs = func(request *http.Request) []reflect.Value {
-			return nil
-		}
-	case 1:
-		if in[0] != reflect.TypeOf(url.Values(nil)) {
-			panic(fmt.Errorf("HandleGET(): handler argument must be url.Values, got %s", in[0]))
-		}
-		httpHandler.getArgs = func(request *http.Request) []reflect.Value {
-			return []reflect.Value{reflect.ValueOf(request.URL.Query())}
-		}
-	default:
-		panic(fmt.Errorf("HandleGET(): handler accepts zero or one arguments, got %d", len(in)))
-	}
-	httpHandler.writeResult = writeResultFunc(out)
-	http.Handle(path, httpHandler)
+type H map[string]any
+type Context struct {
+	Writer     http.ResponseWriter
+	Req        *http.Request
+	Path       string
+	Method     string
+	Params     map[string]string
+	StatusCode int
+	handlers   []HandlerFunc
+	index      int
+	engine     *Engine
 }
-func HandlePOST(path string, handler interface{}, object ...interface{}) {
-	handlerFunc, in, out := getHandlerFunc(handler, object)
-	httpHandler := &httpHandler{
-		method:      "POST",
-		handlerFunc: handlerFunc,
+
+func newContext(w http.ResponseWriter, req *http.Request) *Context {
+	return &Context{
+		Path:   req.URL.Path,
+		Method: req.Method,
+		Req:    req,
+		Writer: w,
+		index:  -1,
 	}
-	switch len(in) {
-	case 1:
-		a := in[0]
-		if a != urlValuesType && (a.Kind() != reflect.Ptr || a.Elem().Kind() != reflect.Struct) && a.Kind() != reflect.String {
-			panic(fmt.Errorf("HandlePOST(): first handler argument must be a struct pointer, string, or url.Values. Got %s", a))
-		}
-		httpHandler.getArgs = func(request *http.Request) []reflect.Value {
-			ct := request.Header.Get("Content-Type")
-			switch ct {
-			case "", "application/x-www-form-urlencoded":
-				request.ParseForm()
-				if a == urlValuesType {
-					return []reflect.Value{reflect.ValueOf(request.Form)}
-				}
-				s := reflect.New(a.Elem())
-				if len(request.Form) == 1 && request.Form.Get("JSON") != "" {
-					err := json.Unmarshal([]byte(request.Form.Get("JSON")), s.Interface())
-					if err != nil {
-						panic(err)
-					}
-				} else {
-					v := s.Elem()
-					for key, value := range request.Form {
-						if f := v.FieldByName(key); f.IsValid() && f.CanSet() {
-							switch f.Kind() {
-							case reflect.String:
-								f.SetString(value[0])
-							case reflect.Bool:
-								if val, err := strconv.ParseBool(value[0]); err == nil {
-									f.SetBool(val)
-								}
-							case reflect.Float32, reflect.Float64:
-								if val, err := strconv.ParseFloat(value[0], 64); err == nil {
-									f.SetFloat(val)
-								}
-							case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-								if val, err := strconv.ParseInt(value[0], 0, 64); err == nil {
-									f.SetInt(val)
-								}
-							case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-								if val, err := strconv.ParseUint(value[0], 0, 64); err == nil {
-									f.SetUint(val)
-								}
-							}
-						}
-					}
-				}
-				return []reflect.Value{s}
-
-			case "text/plain":
-				if a.Kind() != reflect.String {
-					panic(fmt.Errorf("HandlePOST(): first handler argument must be a string when request Content-Type is text/plain, got %s", a))
-				}
-				defer request.Body.Close()
-				body, err := ioutil.ReadAll(request.Body)
-				if err != nil {
-					panic(err)
-				}
-				return []reflect.Value{reflect.ValueOf(string(body))}
-
-			case "application/xml":
-				if a.Kind() != reflect.Ptr || a.Elem().Kind() != reflect.Struct {
-					panic(fmt.Errorf("HandlePOST(): first handler argument must be a struct pointer when request Content-Type is application/xml, got %s", a))
-				}
-				s := reflect.New(a.Elem())
-				defer request.Body.Close()
-				body, err := ioutil.ReadAll(request.Body)
-				if err != nil {
-					panic(err)
-				}
-				err = xml.Unmarshal(body, s.Interface())
-				if err != nil {
-					panic(err)
-				}
-				return []reflect.Value{s}
-
-			case "application/json":
-				if a.Kind() != reflect.Ptr || a.Elem().Kind() != reflect.Struct {
-					panic(fmt.Errorf("HandlePOST(): first handler argument must be a struct pointer when request Content-Type is application/json, got %s", a))
-				}
-				s := reflect.New(a.Elem())
-				defer request.Body.Close()
-				body, err := ioutil.ReadAll(request.Body)
-				if err != nil {
-					panic(err)
-				}
-				err = json.Unmarshal(body, s.Interface())
-				if err != nil {
-					panic(err)
-				}
-				return []reflect.Value{s}
-
-			case "multipart/form-data":
-				if a.Kind() != reflect.Ptr || a.Elem().Kind() != reflect.Struct {
-					panic(fmt.Errorf("HandlePOST(): first handler argument must be a struct pointer when request Content-Type is multipart/form-data, got %s", a))
-				}
-				file, _, err := request.FormFile("JSON")
-				if err != nil {
-					panic(err)
-				}
-				s := reflect.New(a.Elem())
-				defer file.Close()
-				body, err := ioutil.ReadAll(request.Body)
-				if err != nil {
-					panic(err)
-				}
-				err = json.Unmarshal(body, s.Interface())
-				if err != nil {
-					panic(err)
-				}
-				return []reflect.Value{s}
-			}
-			panic("Unsupported POST Content-Type: " + ct)
-		}
-	default:
-		panic(fmt.Errorf("HandlePOST(): handler accepts only one or thwo arguments, got %d", len(in)))
-	}
-	httpHandler.writeResult = writeResultFunc(out)
-	http.Handle(path, httpHandler)
 }
-func RunServer(addr string, stop chan struct{}) {
-	server := &http.Server{Addr: addr}
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		panic(err)
+func (c *Context) Next() {
+	c.index++
+	s := len(c.handlers)
+	for ; c.index < s; c.index++ {
+		c.handlers[c.index](c)
 	}
-	if stop != nil {
-		go func() {
-			<-stop
-			err := listener.Close()
-			if err != nil {
-				os.Stderr.WriteString(err.Error())
+}
+func (c *Context) Fail(code int, err string) {
+	c.index = len(c.handlers)
+	c.JSON(code, H{"message": err})
+}
+func (c *Context) Param(key string) string {
+	value, _ := c.Params[key]
+	return value
+}
+func (c *Context) PostForm(key string) string {
+	return c.Req.FormValue(key)
+}
+func (c *Context) Query(key string) string {
+	return c.Req.URL.Query().Get(key)
+}
+func (c *Context) Status(code int) {
+	c.StatusCode = code
+	c.Writer.WriteHeader(code)
+}
+func (c *Context) SetHeader(key string, value string) {
+	c.Writer.Header().Set(key, value)
+}
+func (c *Context) String(code int, format string, values ...any) {
+	c.SetHeader("Content-Type", "text/plain;charset=utf-8")
+	c.Status(code)
+	c.Writer.Write([]byte(fmt.Sprintf(format, values...)))
+}
+func (c *Context) JSON(code int, obj any) {
+	c.SetHeader("Content-Type", "application/json;charset=utf-8")
+	c.Status(code)
+	encoder := json.NewEncoder(c.Writer)
+	if err := encoder.Encode(obj); err != nil {
+		http.Error(c.Writer, err.Error(), 500)
+	}
+}
+func (c *Context) Data(code int, data []byte) {
+	c.Status(code)
+	c.Writer.Write(data)
+}
+func (c *Context) HTML(code int, name string, data any) {
+	c.SetHeader("Content-Type", "text/html;charset=utf-8")
+	c.Status(code)
+	if err := c.engine.htmlTemplates.ExecuteTemplate(c.Writer, name, data); err != nil {
+		c.Fail(500, err.Error())
+	}
+}
+func (c *Context) File(filepath string) {
+	http.ServeFile(c.Writer, c.Req, filepath)
+}
+func Logger() HandlerFunc {
+	return func(c *Context) {
+		t := time.Now()
+		c.Next()
+		log.Printf("[%d] %s in %v", c.StatusCode, c.Req.RequestURI, time.Since(t))
+	}
+}
+func trace(message string) string {
+	var pcs [32]uintptr
+	n := runtime.Callers(3, pcs[:])
+
+	var str strings.Builder
+	str.WriteString(message + "\nTraceback:")
+	for _, pc := range pcs[:n] {
+		fn := runtime.FuncForPC(pc)
+		file, line := fn.FileLine(pc)
+		str.WriteString(fmt.Sprintf("\n\t%s:%d", file, line))
+	}
+	return str.String()
+}
+func Recovery() HandlerFunc {
+	return func(c *Context) {
+		defer func() {
+			if err := recover(); err != nil {
+				message := fmt.Sprintf("%s", err)
+				log.Printf("%s\n\n", trace(message))
+				c.Fail(http.StatusInternalServerError, "Internal Server Error")
 			}
-			return
 		}()
+
+		c.Next()
 	}
-	Log("Server listening at", addr)
-	err = server.Serve(listener)
-	if !strings.Contains(err.Error(), "use of closed network connection") {
-		panic(err)
-	}
-	Log("Server stopped")
-}
-func getHandlerFunc(handler interface{}, object []interface{}) (f reflectionFunc, in, out []reflect.Type) {
-	handlerValue := reflect.ValueOf(handler)
-	if handlerValue.Kind() != reflect.Func {
-		panic(fmt.Errorf("handler must be a function, got %T", handler))
-	}
-	handlerType := handlerValue.Type()
-	out = make([]reflect.Type, handlerType.NumOut())
-	for i := 0; i < handlerType.NumOut(); i++ {
-		out[i] = handlerType.Out(i)
-	}
-	switch len(object) {
-	case 0:
-		f = func(args []reflect.Value) []reflect.Value {
-			return handlerValue.Call(args)
-		}
-		in = make([]reflect.Type, handlerType.NumIn())
-		for i := 0; i < handlerType.NumIn(); i++ {
-			in[i] = handlerType.In(i)
-		}
-		return f, in, out
-	case 1:
-		objectValue := reflect.ValueOf(object[0])
-		if objectValue.Kind() != reflect.Ptr {
-			panic(fmt.Errorf("object must be a pointer, got %T", objectValue.Interface()))
-		}
-		f = func(args []reflect.Value) []reflect.Value {
-			args = append([]reflect.Value{objectValue}, args...)
-			return handlerValue.Call(args)
-		}
-		in = make([]reflect.Type, handlerType.NumIn()-1)
-		for i := 1; i < handlerType.NumIn(); i++ {
-			in[i] = handlerType.In(i)
-		}
-		return f, in, out
-	}
-	panic(fmt.Errorf("HandleGET(): only zero or one object allowed, got %d", len(object)))
 }
 
-var (
-	urlValuesType = reflect.TypeOf((*url.Values)(nil)).Elem()
-	errorType     = reflect.TypeOf((*error)(nil)).Elem()
-)
-
-type reflectionFunc func([]reflect.Value) []reflect.Value
-
-type httpHandler struct {
-	method      string
-	getArgs     func(*http.Request) []reflect.Value
-	handlerFunc reflectionFunc
-	writeResult func([]reflect.Value, http.ResponseWriter)
+type node struct {
+	pattern  string
+	part     string
+	children []*node
+	isWild   bool
 }
 
-func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	Log(request.Method, request.URL)
-	if !DontCheckRequestMethod && request.Method != handler.method {
-		http.Error(writer, "405: Method Not Allowed", http.StatusMethodNotAllowed)
+func (n *node) String() string {
+	return fmt.Sprintf("node{pattern=%s, part=%s, isWild=%t}", n.pattern, n.part, n.isWild)
+}
+
+func (n *node) insert(pattern string, parts []string, height int) {
+	if len(parts) == height {
+		n.pattern = pattern
 		return
 	}
-	result := handler.handlerFunc(handler.getArgs(request))
-	handler.writeResult(result, writer)
+
+	part := parts[height]
+	child := n.matchChild(part)
+	if child == nil {
+		child = &node{part: part, isWild: part[0] == ':' || part[0] == '*'}
+		n.children = append(n.children, child)
+	}
+	child.insert(pattern, parts, height+1)
 }
 
-func writeError(writer http.ResponseWriter, err error) {
-	Log("ERROR:", err)
-	http.Error(writer, err.Error(), http.StatusInternalServerError)
+func (n *node) search(parts []string, height int) *node {
+	if len(parts) == height || strings.HasPrefix(n.part, "*") {
+		if n.pattern == "" {
+			return nil
+		}
+		return n
+	}
+
+	part := parts[height]
+	children := n.matchChildren(part)
+
+	for _, child := range children {
+		result := child.search(parts, height+1)
+		if result != nil {
+			return result
+		}
+	}
+
+	return nil
 }
 
-func writeResultFunc(out []reflect.Type) func([]reflect.Value, http.ResponseWriter) {
-	var returnError func(result []reflect.Value, writer http.ResponseWriter) bool
-	switch len(out) {
-	case 2:
-		if out[1] == errorType {
-			returnError = func(result []reflect.Value, writer http.ResponseWriter) (isError bool) {
-				if isError = !result[1].IsNil(); isError {
-					writeError(writer, result[1].Interface().(error))
-				}
-				return isError
-			}
-		} else {
-			panic(fmt.Errorf("HandleGET(): second result value of handle must be of type error, got %s", out[1]))
-		}
-		fallthrough
-	case 1:
-		r := out[0]
-		if r.Kind() == reflect.Struct || (r.Kind() == reflect.Ptr && r.Elem().Kind() == reflect.Struct) {
-			return func(result []reflect.Value, writer http.ResponseWriter) {
-				if returnError != nil && returnError(result, writer) {
-					return
-				}
-				j, err := json.Marshal(result[0].Interface())
-				if err != nil {
-					writeError(writer, err)
-					return
-				}
-				if IndentJSON != "" {
-					var buf bytes.Buffer
-					err = json.Indent(&buf, j, "", IndentJSON)
-					if err != nil {
-						writeError(writer, err)
-						return
-					}
-					j = buf.Bytes()
-				}
-				writer.Header().Set("Content-Type", "application/json")
-				writer.Write(j)
-			}
-		} else if r.Kind() == reflect.String {
-			return func(result []reflect.Value, writer http.ResponseWriter) {
-				if returnError != nil && returnError(result, writer) {
-					return
-				}
-				bytes := []byte(result[0].String())
-				ct := http.DetectContentType(bytes)
-				writer.Header().Set("Content-Type", ct)
-				writer.Write(bytes)
-			}
-		} else {
-			panic(fmt.Errorf("first result value of handler must be of type string or struct(pointer), got %s", r))
-		}
-	case 0:
-		return func(result []reflect.Value, writer http.ResponseWriter) {
-		}
+func (n *node) travel(list *([]*node)) {
+	if n.pattern != "" {
+		*list = append(*list, n)
 	}
-	panic(fmt.Errorf("zero to two return values allowed, got %d", len(out)))
+	for _, child := range n.children {
+		child.travel(list)
+	}
 }
-func GetJSON(addr string, out interface{}) error {
-	response, err := http.Get(addr)
-	if err != nil {
-		return err
+
+func (n *node) matchChild(part string) *node {
+	for _, child := range n.children {
+		if child.part == part || child.isWild {
+			return child
+		}
 	}
-	defer response.Body.Close()
-	body, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(body, out)
+	return nil
 }
-func GetJSONStrict(addr string, out interface{}) error {
-	response, err := http.Get(addr)
-	if err != nil {
-		return err
+
+func (n *node) matchChildren(part string) []*node {
+	nodes := make([]*node, 0)
+	for _, child := range n.children {
+		if child.part == part || child.isWild {
+			nodes = append(nodes, child)
+		}
 	}
-	if ct := response.Header.Get("Content-Type"); ct != "application/json" {
-		return fmt.Errorf("GetJSONStrict expected Content-Type 'application/json', but got '%s'", ct)
+	return nodes
+}
+
+type HandlerFunc func(*Context)
+type (
+	RouterGroup struct {
+		prefix      string
+		middlewares []HandlerFunc
+		parent      *RouterGroup
+		engine      *Engine
 	}
-	defer response.Body.Close()
-	body, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		return err
+	Engine struct {
+		*RouterGroup
+		router        *router
+		groups        []*RouterGroup
+		htmlTemplates *template.Template
+		funcMap       template.FuncMap
 	}
-	return json.Unmarshal(body, out)
+)
+
+func New() *Engine {
+	engine := &Engine{router: newRouter()}
+	engine.RouterGroup = &RouterGroup{engine: engine}
+	engine.groups = []*RouterGroup{engine.RouterGroup}
+	return engine
+}
+func Default() *Engine {
+	engine := New()
+	engine.Use(Logger(), Recovery())
+	return engine
+}
+func (group *RouterGroup) Group(prefix string) *RouterGroup {
+	engine := group.engine
+	newGroup := &RouterGroup{
+		prefix: group.prefix + prefix,
+		parent: group,
+		engine: engine,
+	}
+	engine.groups = append(engine.groups, newGroup)
+	return newGroup
+}
+func (group *RouterGroup) Use(middlewares ...HandlerFunc) {
+	group.middlewares = append(group.middlewares, middlewares...)
+}
+func (group *RouterGroup) addRoute(method string, comp string, handler HandlerFunc) {
+	pattern := group.prefix + comp
+	log.Printf("Route %4s - %s", method, pattern)
+	group.engine.router.addRoute(method, pattern, handler)
+}
+func (group *RouterGroup) GET(pattern string, handler HandlerFunc) {
+	group.addRoute("GET", pattern, handler)
+}
+func (group *RouterGroup) POST(pattern string, handler HandlerFunc) {
+	group.addRoute("POST", pattern, handler)
+}
+func (group *RouterGroup) createStaticHandler(relativePath string, fs http.FileSystem) HandlerFunc {
+	absolutePath := path.Join(group.prefix, relativePath)
+	fileServer := http.StripPrefix(absolutePath, http.FileServer(fs))
+	return func(c *Context) {
+		file := c.Param("filepath")
+		if _, err := fs.Open(file); err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		fileServer.ServeHTTP(c.Writer, c.Req)
+	}
+}
+func (group *RouterGroup) Static(relativePath string, root string) {
+	handler := group.createStaticHandler(relativePath, http.Dir(root))
+	urlPattern := path.Join(relativePath, "/*filepath")
+	group.GET(urlPattern, handler)
+}
+
+func (engine *Engine) SetFuncMap(funcMap template.FuncMap) {
+	engine.funcMap = funcMap
+}
+func (engine *Engine) LoadHTMLGlob(pattern string) {
+	engine.htmlTemplates = template.Must(template.New("").Funcs(engine.funcMap).ParseGlob(pattern))
+}
+func (engine *Engine) Run(addr string) (err error) {
+	return http.ListenAndServe(addr, engine)
+}
+func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	var middlewares []HandlerFunc
+	for _, group := range engine.groups {
+		if strings.HasPrefix(req.URL.Path, group.prefix) {
+			middlewares = append(middlewares, group.middlewares...)
+		}
+	}
+	c := newContext(w, req)
+	c.handlers = middlewares
+	c.engine = engine
+	engine.router.handle(c)
+}
+
+type router struct {
+	roots    map[string]*node
+	handlers map[string]HandlerFunc
+}
+
+func newRouter() *router {
+	return &router{
+		roots:    make(map[string]*node),
+		handlers: make(map[string]HandlerFunc),
+	}
+}
+func parsePattern(pattern string) []string {
+	vs := strings.Split(pattern, "/")
+
+	parts := make([]string, 0)
+	for _, item := range vs {
+		if item != "" {
+			parts = append(parts, item)
+			if item[0] == '*' {
+				break
+			}
+		}
+	}
+	return parts
+}
+
+func (r *router) addRoute(method string, pattern string, handler HandlerFunc) {
+	parts := parsePattern(pattern)
+
+	key := method + "-" + pattern
+	_, ok := r.roots[method]
+	if !ok {
+		r.roots[method] = &node{}
+	}
+	r.roots[method].insert(pattern, parts, 0)
+	r.handlers[key] = handler
+}
+
+func (r *router) getRoute(method string, path string) (*node, map[string]string) {
+	searchParts := parsePattern(path)
+	params := make(map[string]string)
+	root, ok := r.roots[method]
+
+	if !ok {
+		return nil, nil
+	}
+
+	n := root.search(searchParts, 0)
+
+	if n != nil {
+		parts := parsePattern(n.pattern)
+		for index, part := range parts {
+			if part[0] == ':' {
+				params[part[1:]] = searchParts[index]
+			}
+			if part[0] == '*' && len(part) > 1 {
+				params[part[1:]] = strings.Join(searchParts[index:], "/")
+				break
+			}
+		}
+		return n, params
+	}
+
+	return nil, nil
+}
+
+func (r *router) getRoutes(method string) []*node {
+	root, ok := r.roots[method]
+	if !ok {
+		return nil
+	}
+	nodes := make([]*node, 0)
+	root.travel(&nodes)
+	return nodes
+}
+
+func (r *router) handle(c *Context) {
+	n, params := r.getRoute(c.Method, c.Path)
+
+	if n != nil {
+		key := c.Method + "-" + n.pattern
+		c.Params = params
+		c.handlers = append(c.handlers, r.handlers[key])
+	} else {
+		c.handlers = append(c.handlers, func(c *Context) {
+			c.String(http.StatusNotFound, "404 page not found.")
+		})
+	}
+	c.Next()
+}
+func BasicAuth(h HandlerFunc, requiredUser, requiredPassword string) HandlerFunc {
+	return func(c *Context) {
+		user, password, hasAuth := c.Req.BasicAuth()
+		if hasAuth && user == requiredUser && password == requiredPassword {
+			h(c)
+		} else {
+			c.SetHeader("WWW-Authenticate", "Basic realm=Restricted")
+			http.Error(c.Writer, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		}
+	}
+}
+func CORS() HandlerFunc {
+	return func(c *Context) {
+		c.Writer.Header().Add("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE, UPDATE, PATCH")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, X-Extra-Header, Content-Type, Accept, Authorization")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		if c.Req.Method == "OPTIONS" {
+			fmt.Println(c.Req.Header)
+			c.Status(200)
+		} else {
+			c.Next()
+		}
+	}
 }
