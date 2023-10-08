@@ -99,7 +99,8 @@ nums := []int{1, 9, 3, 7, 5}
         rx = append(rx, v+1)
     })
     fmt.Println(rx)
-
+## github.com/logoove/go/sqlite
+对goframe2.0+驱动包
 ## 备注
 
 以上包都只含标准库,不含有任何第三方库.所以无需联网也能使用.
