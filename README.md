@@ -1,6 +1,11 @@
-## github.com/logoove/go/cli
+### golang工具包,包含路由,命令工具,函数库,sqlite
+
+### 命令行程序包
+github.com/logoove/go/cli
 
 此包用于开发cli程序,修改自一个国外很少人用的包,用来开发简单cli还是不错的.
+我的作品xv用此包开发.
+
 一个go/py/nodejs/flutter版本管理器 <https://github.com/logoove/xv>
 
 ```
@@ -48,10 +53,11 @@ app := cli.NewApp()
     app.Run(os.Args)
     }
 ```
+### 路由包类似gin
 
-## github.com/logoove/go/rest
+github.com/logoove/go/rest
 
-用于开发简单的网站,这个包只有11kb非常小.
+用于开发简单的网站,这个包只有10KB,功能包含分组,简单鉴权,路由,模板,json,静态文件等.
 
 ```
 package main
@@ -59,7 +65,6 @@ import (
     "fmt"
     "github.com/logoove/go/rest"
 )
-
 func main() {
 r := rest.New()
 	r.Use(rest.CORS())
@@ -87,21 +92,55 @@ r := rest.New()
 	r.Run("0.0.0.0:8080")
 }
 ```
+### 常用工具函数包
 
-## github.com/logoove/go/yo
+github.com/logoove/go/yo
 
 一些常见的函数,参考了php,泛型,还有一些流行的库,放在了一起方便使用.原来的php名称废弃.
 例如,返回时间戳: fmt.Print(yo.Time())
+
 处理scile的foreach
+~~~
 nums := []int{1, 9, 3, 7, 5}
     var rx []int
     yo.ForEach(nums, func(k int, v int) {
         rx = append(rx, v+1)
     })
     fmt.Println(rx)
-## github.com/logoove/go/sqlite
-对goframe2.0+驱动包
-## 备注
+~~~
+
+### goframe2.0以上版本驱动包
+
+_ "github.com/logoove/go/sqlite"
+或者用goframe官方的
+_ "github.com/gogf/gf/contrib/drivers/sqlite/v2"
+~~~
+package main
+
+import (
+	"fmt"
+	"github.com/gogf/gf/v2/database/gdb"
+	"github.com/gogf/gf/v2/frame/g"
+	"github.com/gogf/gf/v2/net/ghttp"
+	_ "github.com/logoove/go/sqlite"
+)
+
+func main() {
+	s := g.Server()
+	db, _ := gdb.New(gdb.ConfigNode{
+		Link: "sqlite::@file(db.db)",
+	})
+	s.BindHandler("/", func(r *ghttp.Request) {
+		isok, _ := db.Model("stat").Where("md5=? and types=?", "1", "1").One()
+		r.Response.Write("hello 世界,值", isok["num"])
+	})
+	s.SetPort(8881)
+	s.Run()
+}
+~~~
+
+
+### 说明
 
 以上包都只含标准库,不含有任何第三方库.所以无需联网也能使用.
-run.bat用来生成带图标和描述的win应用.
+
