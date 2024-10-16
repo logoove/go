@@ -7,9 +7,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
-	crand "crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/csv"
@@ -17,17 +17,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
+	"io/fs"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
-	"net/smtp"
+	"net/mail"
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -56,71 +55,1798 @@ type Complex interface {
 	~complex64 | ~complex128
 }
 type Ordered interface {
-	Integer | Float | ~string
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
+		~float32 | ~float64 |
+		~string
 }
+type Entry[K comparable, V any] struct {
+	Key   K
+	Value V
+}
+type Map = map[string]any
+type MapStrStr = map[string]string
+type MapStrInt = map[string]int
+type MapIntStr = map[int]string
+type MapIntInt = map[int]int
+type MapStrAny = map[string]any
+type MapIntAny = map[int]any
 
-// Uniq[T comparable]
-// Uniq([]string{"Samuel", "John", "Samuel"})
+var timeFormat = MapStrStr{
+	"yyyy-mm-dd hh:mm:ss": "2006-01-02 15:04:05",
+	"yyyy-mm-dd hh:mm":    "2006-01-02 15:04",
+	"yyyy-mm-dd hh":       "2006-01-02 15",
+	"yyyy-mm-dd":          "2006-01-02",
+	"yyyy-mm":             "2006-01",
+	"mm-dd":               "01-02",
+	"dd-mm-yy hh:mm:ss":   "02-01-06 15:04:05",
+	"yyyy/mm/dd hh:mm:ss": "2006/01/02 15:04:05",
+	"yyyy/mm/dd hh:mm":    "2006/01/02 15:04",
+	"yyyy/mm/dd hh":       "2006/01/02 15",
+	"yyyy/mm/dd":          "2006/01/02",
+	"yyyy/mm":             "2006/01",
+	"mm/dd":               "01/02",
+	"dd/mm/yy hh:mm:ss":   "02/01/06 15:04:05",
+	"yyyymmdd":            "20060102",
+	"mmddyy":              "010206",
+	"yyyy":                "2006",
+	"yy":                  "06",
+	"mm":                  "01",
+	"hh:mm:ss":            "15:04:05",
+	"hh:mm":               "15:04",
+	"mm:ss":               "04:05",
+}
+var (
+	factor = [17]int{7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2}
+	verifyStr = [11]string{"1", "0", "X", "9", "8", "7", "6", "5", "4", "3", "2"}
+	birthStartYear = 1900
+provinceKv = map[string]struct{}{ "11": {}, "12": {}, "13": {}, "14": {}, "15": {}, "21": {}, "22": {}, "23": {}, "31": {}, "32": {}, "33": {}, "34": {}, "35": {}, "36": {}, "37": {}, "41": {}, "42": {}, "43": {}, "44": {}, "45": {}, "46": {}, "50": {}, "51": {}, "52": {}, "53": {}, "54": {}, "61": {}, "62": {}, "63": {}, "64": {}, "65": {}, "71": {}, "81": {}, "82": {}, } )
+var (
+	chineseMatcher       *regexp.Regexp = regexp.MustCompile("[\u4e00-\u9fa5]")
+	base64Matcher        *regexp.Regexp = regexp.MustCompile(`^(?:[A-Za-z0-9+\\/]{4})*(?:[A-Za-z0-9+\\/]{2}==|[A-Za-z0-9+\\/]{3}=|[A-Za-z0-9+\\/]{4})$`)
+	chineseMobileMatcher *regexp.Regexp = regexp.MustCompile(`^1(?:3\d|4[4-9]|5[0-35-9]|6[67]|7[013-8]|8\d|9\d)\d{8}$`)
+	chineseIdMatcher     *regexp.Regexp = regexp.MustCompile(`^(\d{17})([0-9]|X|x)$`)
+	creditCardMatcher    *regexp.Regexp = regexp.MustCompile(`^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|(222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720)[0-9]{12}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\\d{3})\\d{11}|6[27][0-9]{14})$`)
+	base64URLMatcher     *regexp.Regexp = regexp.MustCompile(`^([A-Za-z0-9_-]{4})*([A-Za-z0-9_-]{2}(==)?|[A-Za-z0-9_-]{3}=?)?$`)
+	hexMatcher           *regexp.Regexp = regexp.MustCompile(`^(#|0x|0X)?[0-9a-fA-F]+$`)
+	urlMatcher           *regexp.Regexp = regexp.MustCompile(`^((ftp|http|https?):\/\/)?(\S+(:\S*)?@)?((([1-9]\d?|1\d\d|2[01]\d|22[0-3])(\.(1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.([0-9]\d?|1\d\d|2[0-4]\d|25[0-4]))|(([a-zA-Z0-9]+([-\.][a-zA-Z0-9]+)*)|((www\.)?))?(([a-z\x{00a1}-\x{ffff}0-9]+-?-?)*[a-z\x{00a1}-\x{ffff}0-9]+)(?:\.([a-z\x{00a1}-\x{ffff}]{2,}))?))(:(\d{1,5}))?((\/|\?|#)[^\s]*)?$`)
+)
+// Assign[K comparable, V any, Map ~map[K]V]
 //
-//	@Description: 去除scile中重复元素
-//	@param collection
-//	@return []T
-func Uniq[T comparable](collection []T) []T {
-	result := make([]T, 0, len(collection))
-	seen := make(map[T]struct{}, len(collection))
+//	@Description: 合并map
+//	@param maps
+//	@return Map
+func Assign[K comparable, V any, Map ~map[K]V](maps ...Map) Map {
+	count := 0
+	for i := range maps {
+		count += len(maps[i])
+	}
 
-	for _, item := range collection {
-		if _, ok := seen[item]; ok {
-			continue
+	out := make(Map, count)
+	for i := range maps {
+		for k := range maps[i] {
+			out[k] = maps[i][k]
 		}
+	}
 
-		seen[item] = struct{}{}
-		result = append(result, item)
+	return out
+}
+func humanateBytes(s uint64, base float64, sizes []string) string {
+	if s < 10 {
+		return fmt.Sprintf("%d B", s)
+	}
+	e := math.Floor(math.Log(float64(s)) / math.Log(base))
+	suffix := sizes[int(e)]
+	val := math.Floor(float64(s)/math.Pow(base, e)*10+0.5) / 10
+	f := "%.0f %s"
+	if val < 10 {
+		f = "%.1f %s"
+	}
+
+	return fmt.Sprintf(f, val, suffix)
+}
+
+var aes128 = []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
+var aes192 = []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+}
+var aes256 = []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+}
+
+// AesEncode
+//
+//	@Description: AES加密,支持aes128 192 256
+//	@param text
+//	@param k
+//	@return string
+//	@return error
+func AesEncode(text string, k string) (string, error) {
+	var key []byte
+	switch k {
+	case "aes128":
+		key = aes128
+	case "aes192":
+		key = aes192
+	case "aes256":
+		key = aes256
+	}
+	var iv = key[:aes.BlockSize]
+	encrypted := make([]byte, len(text))
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	encrypter := cipher.NewCFBEncrypter(block, iv)
+	encrypter.XORKeyStream(encrypted, []byte(text))
+	return hex.EncodeToString(encrypted), nil
+}
+
+// AesDecode
+//
+//	@Description: AES解密
+//	@param encrypted
+//	@param k
+//	@return string
+//	@return error
+func AesDecode(encrypted string, k string) (string, error) {
+	var key []byte
+	switch k {
+	case "aes128":
+		key = aes128
+	case "aes192":
+		key = aes192
+	case "aes256":
+		key = aes256
+	}
+	var err error
+	defer func() {
+		if e := recover(); e != nil {
+			err = e.(error)
+		}
+	}()
+	src, err := hex.DecodeString(encrypted)
+	if err != nil {
+		return "", err
+	}
+	var iv = key[:aes.BlockSize]
+	decrypted := make([]byte, len(src))
+	var block cipher.Block
+	block, err = aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+	decrypter := cipher.NewCFBDecrypter(block, iv)
+	decrypter.XORKeyStream(decrypted, src)
+	return string(decrypted), nil
+}
+
+// AuthCode
+
+// Authcode("1234==+wo我们",true,"abc")
+//
+//	@Description:对称加密解密
+//	@param text
+//	@param params
+//	@return string
+func AuthCode(text string, params ...interface{}) string {
+	l := len(params)
+
+	isEncode := false
+	key := ""
+	expiry := 0
+	cKeyLen := 4
+
+	if l > 0 {
+		isEncode = params[0].(bool)
+	}
+
+	if l > 1 {
+		key = params[1].(string)
+	}
+
+	if l > 2 {
+		expiry = params[2].(int)
+		if expiry < 0 {
+			expiry = 0
+		}
+	}
+
+	if l > 3 {
+		cKeyLen = params[3].(int)
+		if cKeyLen < 0 {
+			cKeyLen = 0
+		}
+	}
+	if cKeyLen > 32 {
+		cKeyLen = 32
+	}
+
+	timestamp := time.Now().Unix()
+
+	// md5加密key
+	mKey := Md5(key)
+
+	// 参与加密的
+	keyA := Md5(mKey[0:16])
+	// 用于验证数据有效性的
+	keyB := Md5(mKey[16:])
+	// 动态部分
+	var keyC string
+	if cKeyLen > 0 {
+		if isEncode {
+			// 加密的时候，动态获取一个秘钥
+			keyC = Md5(fmt.Sprint(timestamp))[32-cKeyLen:]
+		} else {
+			// 解密的时候从头部获取动态秘钥部分
+			keyC = text[0:cKeyLen]
+		}
+	}
+
+	// 加入了动态的秘钥
+	cryptKey := keyA + Md5(keyA+keyC)
+	// 秘钥长度
+	keyLen := len(cryptKey)
+	if isEncode {
+		// 加密 前10位是过期验证字符串 10-26位字符串验证
+		var d int64
+		if expiry > 0 {
+			d = timestamp + int64(expiry)
+		}
+		text = fmt.Sprintf("%010d%s%s", d, Md5(text + keyB)[0:16], text)
+	} else {
+		// 解密
+		text = string(Base64Decode(text[cKeyLen:]))
+	}
+
+	// 字符串长度
+	textLen := len(text)
+	if textLen <= 0 {
+		return ""
+	}
+
+	// 密匙簿
+	box := Range(0, 256, 1)
+
+	// 对称算法
+	var rndKey []int
+	cryptKeyB := []byte(cryptKey)
+	for i := 0; i < 256; i++ {
+		pos := i % keyLen
+		rndKey = append(rndKey, int(cryptKeyB[pos]))
+	}
+
+	j := 0
+	for i := 0; i < 256; i++ {
+		j = (j + box[i] + rndKey[i]) % 256
+		box[i], box[j] = box[j], box[i]
+	}
+
+	textB := []byte(text)
+	a := 0
+	j = 0
+	var result []byte
+	for i := 0; i < textLen; i++ {
+		a = (a + 1) % 256
+		j = (j + box[a]) % 256
+		box[a], box[j] = box[j], box[a]
+		result = append(result, byte(int(textB[i])^(box[(box[a]+box[j])%256])))
+	}
+
+	if isEncode {
+		return keyC + strings.Replace(Base64Encode(string(result)), "=", "", -1)
+	}
+
+	// 获取前10位，判断过期时间
+	d, _ := strconv.ParseInt(string(result[0:10]), 10, 0)
+	if (d == 0 || d-timestamp > 0) && string(result[10:26]) == Md5(string(result[26:]) + keyB)[0:16] {
+		return string(result[26:])
+	}
+
+	return ""
+}
+
+// ToBits
+//
+//	@Description: 字节格式化
+//	@param s
+//	@return string
+func ToBits(s uint64) string {
+	sizes := []string{"B", "kB", "MB", "GB", "TB", "PB", "EB"}
+	return humanateBytes(s, 1000, sizes)
+}
+
+// Base64Encode
+//
+//	@Description: base64编码
+//	@param s
+//	@return string
+func Base64Encode(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+// Base64Decode
+//
+//	@Description: base64解码
+//	@param s
+//	@return string
+func Base64Decode(s string) string {
+	b, _ := base64.StdEncoding.DecodeString(s)
+	return string(b)
+}
+
+// Chunk[T any, Slice ~[]T]
+//
+//	@Description: 分割数组
+//	@param collection
+//	@param size
+//	@return []Slice
+func Chunk[T any, Slice ~[]T](collection Slice, size int) []Slice {
+	if size <= 0 {
+		panic("Second parameter must be greater than 0")
+	}
+
+	chunksNum := len(collection) / size
+	if len(collection)%size != 0 {
+		chunksNum += 1
+	}
+
+	result := make([]Slice, 0, chunksNum)
+
+	for i := 0; i < chunksNum; i++ {
+		last := (i + 1) * size
+		if last > len(collection) {
+			last = len(collection)
+		}
+		result = append(result, collection[i*size:last:last])
 	}
 
 	return result
 }
 
-// Merge[T any]
+// Compact[T comparable, Slice ~[]T]
 //
-//	@Description: 合并多个切片,同元素存在
-//	@param slices
-//	@return []T
-func Merge[T any](slices ...[]T) []T {
-	result := make([]T, 0)
+//	@Description: 返回去除 "" nil字符的切片
+//	@param collection
+//	@return Slice
+func Compact[T comparable, Slice ~[]T](collection Slice) Slice {
+	var zero T
 
-	for _, v := range slices {
-		result = append(result, v...)
+	result := make(Slice, 0, len(collection))
+
+	for i := range collection {
+		if collection[i] != zero {
+			result = append(result, collection[i])
+		}
 	}
 
 	return result
 }
 
-// Union[T comparable]
+// CountBy[T any]
 //
-//	@Description: 合并多个切片,相同元素也会合并
-//	@param slices
-//	@return []T
-func Union[T comparable](slices ...[]T) []T {
-	result := []T{}
-	contain := map[T]struct{}{}
+//	@Description: 计算符合条件元素数量
+//	@param collection
+//	@param predicate
+//	@return count
+func CountBy[T any](collection []T, predicate func(item T) bool) (count int) {
+	for i := range collection {
+		if predicate(collection[i]) {
+			count++
+		}
+	}
 
-	for _, slice := range slices {
-		for _, item := range slice {
-			if _, ok := contain[item]; !ok {
-				contain[item] = struct{}{}
-				result = append(result, item)
+	return count
+}
+
+// Contains[T comparable]
+//
+//	@Description: 数组中是否包含某元素
+//	@param collection
+//	@param element
+//	@return bool
+func Contains[T comparable](collection []T, element T) bool {
+	for i := range collection {
+		if collection[i] == element {
+			return true
+		}
+	}
+
+	return false
+}
+
+// CreateFile
+//
+//	@Description: 创建文件
+//	@param path
+//	@return bool
+func CreateFile(path string) bool {
+	file, err := os.Create(path)
+	if err != nil {
+		return false
+	}
+
+	defer file.Close()
+	return true
+}
+
+// CopyFile
+//
+//	@Description: 复制文件
+//	@param srcPath
+//	@param dstPath
+//	@return error
+func CopyFile(srcPath string, dstPath string) error {
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	distFile, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer distFile.Close()
+
+	var tmp = make([]byte, 1024*4)
+	for {
+		n, err := srcFile.Read(tmp)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		_, err = distFile.Write(tmp[:n])
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// CopyDir
+//
+//	@Description: 复制目录到目标路径
+//	@param srcPath
+//	@param dstPath
+//	@return error
+func CopyDir(srcPath string, dstPath string) error {
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to get source directory info: %w", err)
+	}
+
+	if !srcInfo.IsDir() {
+		return fmt.Errorf("source path is not a directory: %s", srcPath)
+	}
+
+	err = os.MkdirAll(dstPath, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	entries, err := os.ReadDir(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to read source directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		srcDir := filepath.Join(srcPath, entry.Name())
+		dstDir := filepath.Join(dstPath, entry.Name())
+
+		if entry.IsDir() {
+			err := CopyDir(srcDir, dstDir)
+			if err != nil {
+				return err
+			}
+		} else {
+			err := CopyFile(srcDir, dstDir)
+			if err != nil {
+				return err
 			}
 		}
 	}
 
+	return nil
+}
+
+// CreateDir
+//
+//	@Description: 创建目录
+//	@param absPath
+//	@return error
+func CreateDir(absPath string) error {
+	// return os.MkdirAll(path.Dir(absPath), os.ModePerm)
+	return os.MkdirAll(absPath, os.ModePerm)
+}
+
+// RemoveFile
+//
+//	@Description: 删除文件
+//	@param path
+//	@return error
+func RemoveFile(path string) error {
+	return os.Remove(path)
+}
+
+// ReadFileToString
+//
+//	@Description: 读取文件到字符串
+//	@param path
+//	@return string
+//	@return error
+func ReadFileToString(path string) (string, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+// ReadFileByLine
+//
+//	@Description:按行读取文件内容
+//	@param path
+//	@return []string
+//	@return error
+func ReadFileByLine(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	result := make([]string, 0)
+	buf := bufio.NewReader(f)
+
+	for {
+		line, _, err := buf.ReadLine()
+		l := string(line)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+		result = append(result, l)
+	}
+
+	return result, nil
+}
+
+// FileMode
+//
+//	@Description:获取文件信息
+//	@param path
+//	@return fs.FileMode
+//	@return error
+func FileMode(path string) (fs.FileMode, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Mode(), nil
+}
+
+// MiMeType
+//
+//	@Description: 获取文件mime类型,字符串或*os.File
+//	@param file f, _ := os.Open("./file.go") 或"1.txt"
+//	@return string
+func MiMeType(file any) string {
+	var mediatype string
+
+	readBuffer := func(f *os.File) ([]byte, error) {
+		buffer := make([]byte, 512)
+		_, err := f.Read(buffer)
+		if err != nil {
+			return nil, err
+		}
+		return buffer, nil
+	}
+
+	if filePath, ok := file.(string); ok {
+		f, err := os.Open(filePath)
+		if err != nil {
+			return mediatype
+		}
+		buffer, err := readBuffer(f)
+		if err != nil {
+			return mediatype
+		}
+		return http.DetectContentType(buffer)
+	}
+
+	if f, ok := file.(*os.File); ok {
+		buffer, err := readBuffer(f)
+		if err != nil {
+			return mediatype
+		}
+		return http.DetectContentType(buffer)
+	}
+	return mediatype
+}
+
+// CurrentPath
+//
+//	@Description: 当前位置绝对路径
+//	@return string
+func CurrentPath() string {
+	var absPath string
+	_, filename, _, ok := runtime.Caller(1)
+	if ok {
+		absPath = filepath.Dir(filename)
+	}
+
+	return absPath
+}
+
+// FileSize
+//
+//	@Description: 文件大小字节
+//	@param path
+//	@return int64
+//	@return error
+func FileSize(path string) (int64, error) {
+	f, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return f.Size(), nil
+}
+
+// DirSize
+//
+//	@Description: 目录大小字节
+//	@param path
+//	@return int64
+//	@return error
+func DirSize(path string) (int64, error) {
+	var size int64
+	err := filepath.WalkDir(path, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			size += info.Size()
+		}
+		return err
+	})
+	return size, err
+}
+
+// DownloadFile
+//
+//	@Description: 下载文件
+//	@param filepath
+//	@param url
+//	@return error
+func DownloadFile(filepath string, url string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	out, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+
+	return err
+}
+
+// OpenURL
+//
+//	@Description: 访问URL,用于cli
+//	@param url
+func OpenURL(url string) {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start"}
+	case "darwin":
+		cmd = "open"
+	default:
+		cmd = "xdg-open"
+	}
+	args = append(args, url)
+	cmds := exec.Command(cmd, args...)
+	cmds.Start()
+}
+
+// MTime
+//
+//	@Description: 文件修改时间戳
+//	@param filepath
+//	@return int64
+//	@return error
+func MTime(filepath string) (int64, error) {
+	f, err := os.Stat(filepath)
+	if err != nil {
+		return 0, err
+	}
+	return f.ModTime().Unix(), nil
+}
+
+// Sha
+//
+//	@Description: 返回文件sha值，参数`shaType` 应传值为: 1, 256，512
+//	@param filepath
+//	@param shaType
+//	@return string
+//	@return error
+func Sha(filepath string, shaType ...int) (string, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	h := sha1.New()
+	if len(shaType) > 0 {
+		if shaType[0] == 1 {
+			h = sha1.New()
+		} else if shaType[0] == 256 {
+			h = sha256.New()
+		} else if shaType[0] == 512 {
+			h = sha512.New()
+		} else {
+			return "", errors.New("param `shaType` should be 1, 256 or 512")
+		}
+	}
+
+	_, err = io.Copy(h, file)
+
+	if err != nil {
+		return "", err
+	}
+
+	sha := fmt.Sprintf("%x", h.Sum(nil))
+
+	return sha, nil
+
+}
+
+// ReadCsvFile
+//
+//	@Description: 读取csv文件
+//	@param filepath
+//	@param delimiter
+//	@return [][]string
+//	@return error
+func ReadCsvFile(filepath string, delimiter ...rune) ([][]string, error) {
+	f, err := os.Open(filepath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	if len(delimiter) > 0 {
+		reader.Comma = delimiter[0]
+	}
+
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return records, nil
+}
+
+// WriteCsvFile
+//
+//	data := [][]string{
+//	       {"Lili", "22", "female"},
+//	       {"Jim", "21", "male"},
+//	   }
+//		@Description: 写入csv文件
+//		@param filepath
+//		@param records
+//		@param append 是否追加
+//		@param delimiter
+//		@return error
+func WriteCsvFile(filepath string, records [][]string, append bool, delimiter ...rune) error {
+	flag := os.O_RDWR | os.O_CREATE
+
+	if append {
+		flag = flag | os.O_APPEND
+	}
+
+	f, err := os.OpenFile(filepath, flag, 0644)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	writer := csv.NewWriter(f)
+	// 设置默认分隔符为逗号，除非另外指定
+	if len(delimiter) > 0 {
+		writer.Comma = delimiter[0]
+	} else {
+		writer.Comma = ','
+	}
+
+	// 遍历所有记录并处理包含分隔符或双引号的单元格
+	for i := range records {
+		for j := range records[i] {
+			records[i][j] = escapeCSVField(records[i][j], writer.Comma)
+		}
+	}
+
+	return writer.WriteAll(records)
+}
+func escapeCSVField(field string, delimiter rune) string {
+	// 替换所有的双引号为两个双引号
+	escapedField := strings.ReplaceAll(field, "\"", "\"\"")
+
+	// 如果字段包含分隔符、双引号或换行符，用双引号包裹整个字段
+	if strings.ContainsAny(escapedField, string(delimiter)+"\"\n") {
+		escapedField = fmt.Sprintf("\"%s\"", escapedField)
+	}
+
+	return escapedField
+}
+
+// WriteMapsToCsv
+//
+//		@Description: 将map切片写入csv文件中
+//		@param filepath
+//		@param records []map[string]any{
+//	       {"Name": "Lili", "Age": "22", "Gender": "female"},
+//	       {"Name": "Jim", "Age": "21", "Gender": "male"},
+//	   }
+//		@param appendToExistingFile 是否追加
+//		@param delimiter 分隔符号 ;
+//		@param headers []string{"Name", "Age", "Gender"}
+//		@return error
+func WriteMapsToCsv(filepath string, records []map[string]any, appendToExistingFile bool, delimiter rune,
+	headers ...[]string) error {
+	for _, record := range records {
+		for _, value := range record {
+			if !isCsvSupportedType(value) {
+				return errors.New("unsupported value type detected; only basic types are supported: \nbool, rune, string, int, int64, float32, float64, uint, byte, complex128, complex64, uintptr")
+			}
+		}
+	}
+
+	var columnHeaders []string
+	if len(headers) > 0 {
+		columnHeaders = headers[0]
+	} else {
+		for key := range records[0] {
+			columnHeaders = append(columnHeaders, key)
+		}
+		// sort keys in alphabeta order
+		sort.Strings(columnHeaders)
+	}
+
+	var datasToWrite [][]string
+	if !appendToExistingFile {
+		datasToWrite = append(datasToWrite, columnHeaders)
+	}
+
+	for _, record := range records {
+		var row []string
+		for _, h := range columnHeaders {
+			row = append(row, fmt.Sprintf("%v", record[h]))
+		}
+		datasToWrite = append(datasToWrite, row)
+	}
+
+	return WriteCsvFile(filepath, datasToWrite, appendToExistingFile, delimiter)
+}
+func isCsvSupportedType(v interface{}) bool {
+	switch v.(type) {
+	case bool, rune, string, int, int64, float32, float64, uint, byte, complex128, complex64, uintptr:
+		return true
+	default:
+		return false
+	}
+}
+
+// WriteStringToFile
+//
+//	@Description: 写字符串到文件
+//	@param filepath
+//	@param content
+//	@param append
+//	@return error
+func WriteStringToFile(filepath string, content string, append bool) error {
+	var flag int
+	if append {
+		flag = os.O_RDWR | os.O_CREATE | os.O_APPEND
+	} else {
+		flag = os.O_RDWR | os.O_CREATE | os.O_TRUNC
+	}
+
+	f, err := os.OpenFile(filepath, flag, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(content)
+	return err
+}
+
+// WriteBytesToFile
+//
+//	@Description: bytes写入文件
+//	@param filepath
+//	@param content
+//	@return error
+func WriteBytesToFile(filepath string, content []byte) error {
+	f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	_, err = f.Write(content)
+	return err
+}
+
+// ReadFile
+// reader, fn, err := fileutil.ReadFile("https://httpbin.org/robots.txt")
+//
+//	   if err != nil {
+//	       return
+//	   }
+//	   defer fn()
+//
+//	   dat, err := io.ReadAll(reader)
+//	   if err != nil {
+//	       return
+//	   }
+//
+//	   fmt.Println(string(dat))
+//		@Description: 读取文件或URL文件
+//		@param path
+//		@return reader
+//		@return closeFn
+//		@return err
+func ReadFile(path string) (reader io.ReadCloser, closeFn func(), err error) {
+	switch {
+	case IsUrl(path):
+		resp, err := http.Get(path)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		return resp.Body, func() { resp.Body.Close() }, nil
+	case IsExist(path):
+		reader, err := os.Open(path)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		return reader, func() { reader.Close() }, nil
+	default:
+		return nil, func() {}, errors.New("unknown file type")
+	}
+}
+
+// Drop[T any, Slice ~[]T]
+//
+//	@Description: slice开头删除元素
+//	@param collection
+//	@param n
+//	@return Slice
+func Drop[T any, Slice ~[]T](collection Slice, n int) Slice {
+	if len(collection) <= n {
+		return make(Slice, 0)
+	}
+
+	result := make(Slice, 0, len(collection)-n)
+
+	return append(result, collection[n:]...)
+}
+
+// DropRight[T any, Slice ~[]T]
+//
+//	@Description: slice末尾删除元素
+//	@param collection
+//	@param n
+//	@return Slice
+func DropRight[T any, Slice ~[]T](collection Slice, n int) Slice {
+	if len(collection) <= n {
+		return Slice{}
+	}
+
+	result := make(Slice, 0, len(collection)-n)
+	return append(result, collection[:len(collection)-n]...)
+}
+
+// DropByIndex[T any]
+//
+//	@Description: 根据索引删除元素
+//	@param collection
+//	@param indexes
+//	@return []T
+func DropByIndex[T any](collection []T, indexes ...int) []T {
+	initialSize := len(collection)
+	if initialSize == 0 {
+		return make([]T, 0)
+	}
+
+	for i := range indexes {
+		if indexes[i] < 0 {
+			indexes[i] = initialSize + indexes[i]
+		}
+	}
+
+	indexes = Uniq(indexes)
+	sort.Ints(indexes)
+
+	result := make([]T, 0, initialSize)
+	result = append(result, collection...)
+
+	for i := range indexes {
+		if indexes[i]-i < 0 || indexes[i]-i >= initialSize-i {
+			continue
+		}
+
+		result = append(result[:indexes[i]-i], result[indexes[i]-i+1:]...)
+	}
+
 	return result
 }
 
-// 是否升序
-func IsAsc[T Ordered](slice []T) bool {
-	for i := 1; i < len(slice); i++ {
-		if slice[i-1] > slice[i] {
+// Entries[K comparable, V any]
+//
+//	@Description: map键值对转换数组
+//	@param in
+//	@return []Entry[K
+//	@return V]
+func Entries[K comparable, V any](in map[K]V) []Entry[K, V] {
+	entries := make([]Entry[K, V], 0, len(in))
+
+	for k := range in {
+		entries = append(entries, Entry[K, V]{
+			Key:   k,
+			Value: in[k],
+		})
+	}
+
+	return entries
+}
+func Empty[T any]() T {
+	var zero T
+	return zero
+}
+
+// Ellipsis
+//
+//	@Description: 字符串截取
+//	@param str
+//	@param length
+//	@return string
+func Ellipsis(str string, length uint) string {
+	str = strings.TrimSpace(str)
+	size := uint(RuneLength(str))
+	if size > length {
+		if size < 3 || length < 3 {
+			return "..."
+		}
+		return Substring(str, 0, length) + "..."
+	}
+
+	return str
+}
+
+// EmojiDecode
+//
+//	@Description: emoji解码
+//	@param s
+//	@return string
+func EmojiDecode(s string) string {
+	re := regexp.MustCompile("\\[[\\\\u0-9a-zA-Z]+\\]")
+	//提取emoji数据表达式
+	reg := regexp.MustCompile("\\[\\\\u|]")
+	src := re.FindAllString(s, -1)
+	for i := 0; i < len(src); i++ {
+		e := reg.ReplaceAllString(src[i], "")
+		p, err := strconv.ParseInt(e, 16, 32)
+		if err == nil {
+			s = strings.Replace(s, src[i], string(rune(p)), -1)
+		}
+	}
+	return s
+}
+
+// EmojiEncode
+//
+//	@Description: emoji编码
+//	@param s
+//	@return string
+func EmojiEncode(s string) string {
+	ret := ""
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		if len(string(rs[i])) == 4 {
+			u := `[\u` + strconv.FormatInt(int64(rs[i]), 16) + `]`
+			ret += u
+
+		} else {
+			ret += string(rs[i])
+		}
+	}
+	return ret
+}
+
+// Emoji
+//
+//	@Description: emoji转换实体直接显示
+//	@param s
+//	@return ss
+func Emoji(s string) (ss string) {
+	s1 := strings.Split(s, "")
+	for _, v := range s1 {
+		if len(v) >= 4 {
+			vv := []rune(v)
+			k := int(vv[0])
+			ss += "&#" + strconv.Itoa(k) + ";"
+		} else {
+			ss += v
+		}
+	}
+	return
+}
+
+// FromEntries[K comparable, V any]
+//
+//	@Description: 键值对数组转换map
+//	@param entries
+//	@param V]
+//	@return map[K]V
+func FromEntries[K comparable, V any](entries []Entry[K, V]) map[K]V {
+	out := make(map[K]V, len(entries))
+
+	for i := range entries {
+		out[entries[i].Key] = entries[i].Value
+	}
+
+	return out
+}
+
+// FirstOr[T any]
+//
+//	@Description: 返回集合第一个元素,不存在则是默认值
+//	@param collection
+//	@param fallback
+//	@return T
+func First[T any](collection []T, fallback T) T {
+	i, err := Nth(collection, 0)
+	if err != nil {
+		return fallback
+	}
+	return i
+
+}
+
+// FindKey[K comparable, V comparable]
+//
+//	@Description: 在map中查找值的键
+//	@param object
+//	@param value
+//	@return K
+//	@return bool
+func FindKey[K comparable, V comparable](object map[K]V, value V) (K, bool) {
+	for k := range object {
+		if object[k] == value {
+			return k, true
+		}
+	}
+
+	return Empty[K](), false
+}
+
+// ForEach[T any]
+//
+//	@Description:循环输出
+//	@param collection
+//	@param iteratee
+func ForEach[T any](collection []T, iteratee func(item T, index int)) {
+	for i := range collection {
+		iteratee(collection[i], i)
+	}
+}
+
+// Flatten[T any, Slice ~[]T]
+//
+//	@Description: 多维数组转换一维
+//	@param collection
+//	@return Slice
+func Flatten[T any, Slice ~[]T](collection []Slice) Slice {
+	totalLen := 0
+	for i := range collection {
+		totalLen += len(collection[i])
+	}
+
+	result := make(Slice, 0, totalLen)
+	for i := range collection {
+		result = append(result, collection[i]...)
+	}
+
+	return result
+}
+
+// HasKey[K comparable, V any]
+//
+//	@Description:判断key是否存在
+//	@param in
+//	@param key
+//	@return bool
+func HasKey[K comparable, V any](in map[K]V, key K) bool {
+	_, ok := in[key]
+	return ok
+}
+
+// Concat[T any, Slice ~[]T]
+//
+//	@Description: 合并数组并排序
+//	@param collections
+//	@return Slice
+func Concat[T any, Slice ~[]T](collections ...Slice) Slice {
+	if len(collections) == 0 {
+		return Slice{}
+	}
+
+	maxSize := 0
+	totalSize := 0
+	for i := range collections {
+		size := len(collections[i])
+		totalSize += size
+		if size > maxSize {
+			maxSize = size
+		}
+	}
+
+	if maxSize == 0 {
+		return Slice{}
+	}
+
+	result := make(Slice, totalSize)
+
+	resultIdx := 0
+	for i := 0; i < maxSize; i++ {
+		for j := range collections {
+			if len(collections[j])-1 < i {
+				continue
+			}
+
+			result[resultIdx] = collections[j][i]
+			resultIdx++
+		}
+	}
+
+	return result
+}
+
+// ImgToEnbase64
+//
+//	@Description: 图片文件转换成base64字符
+//	@param filename
+//	@return s
+func ImgToEnbase64(filename string) (s string) {
+	ext := filepath.Ext(filename)
+	ext = strings.TrimLeft(ext, ".")
+	srcByte, _ := os.ReadFile(filename)
+	s = Base64Encode(string(srcByte))
+	s = "data:image/" + ext + ";base64," + s
+	return
+}
+
+// ImgToDebase64
+//
+//	@Description: 图片解码base64成文件
+//	@param path
+//	@param data
+//	@return ps
+func ImgToDebase64(path, data string) (ps string) {
+	re := regexp.MustCompile(`^(data:\s*image\/(\w+);base64,)`)
+	r := re.FindStringSubmatch(data)
+	ext := r[2]
+	bs := strings.Replace(data, r[1], "", -1)
+	CreateDir(path)
+	ps = path + "/" + Sha1(data) + "." + ext
+	bs = Base64Decode(bs)
+	os.WriteFile(ps, []byte(bs), 0666)
+	return ps
+}
+
+// Intersect[T comparable, Slice ~[]T]
+//
+//	@Description: 计算交集
+//	@param list1
+//	@param list2
+//	@return Slice
+func Intersect[T comparable, Slice ~[]T](list1 Slice, list2 Slice) Slice {
+	result := Slice{}
+	seen := map[T]struct{}{}
+
+	for i := range list1 {
+		seen[list1[i]] = struct{}{}
+	}
+
+	for i := range list2 {
+		if _, ok := seen[list2[i]]; ok {
+			result = append(result, list2[i])
+		}
+	}
+
+	return result
+}
+
+// Invert[K comparable, V comparable]
+//
+//	@Description: map键值对调
+//	@param in
+//	@return map[V]K
+func Invert[K comparable, V comparable](in map[K]V) map[V]K {
+	out := make(map[V]K, len(in))
+
+	for k := range in {
+		out[in[k]] = k
+	}
+
+	return out
+}
+
+// IsNil
+//
+//	@Description: 判断是否nil
+//	@param x
+//	@return bool
+func IsNil(x any) bool {
+	defer func() { recover() }() // nolint:errcheck
+	return x == nil || reflect.ValueOf(x).IsNil()
+}
+
+// IsWindows
+//
+//	@Description: 是否win系统
+//	@return bool
+func IsWindows() bool {
+	return runtime.GOOS == "windows"
+}
+
+// IsLinux
+//
+//	@Description: 是否linux
+//	@return bool
+func IsLinux() bool {
+	return runtime.GOOS == "linux"
+}
+
+// IsMac
+//
+//	@Description: 是否Mac
+//	@return bool
+func IsMac() bool {
+	return runtime.GOOS == "darwin"
+}
+
+// IsExist
+//
+//	@Description: 判断文件或目录是否存在
+//	@param path
+//	@return bool
+func IsExist(path string) bool {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	return false
+}
+
+// IsDir
+//
+//	@Description: 判断是否目录
+//	@param path
+//	@return bool
+func IsDir(path string) bool {
+	file, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return file.IsDir()
+}
+
+// IsZipFile
+//
+//	@Description: 是否zip压缩文件
+//	@param filepath
+//	@return bool
+func IsZipFile(filepath string) bool {
+	f, err := os.Open(filepath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	buf := make([]byte, 4)
+	if n, err := f.Read(buf); err != nil || n < 4 {
+		return false
+	}
+
+	return bytes.Equal(buf, []byte("PK\x03\x04"))
+}
+
+// IsLink
+//
+//	@Description: 判断文件是否链接
+//	@param path
+//	@return bool
+func IsLink(path string) bool {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeSymlink != 0
+}
+
+// IsEmail
+//
+//	@Description: 是否email
+//	@param email
+//	@return bool
+func IsEmail(email string) bool {
+	_, err := mail.ParseAddress(email)
+	return err == nil
+
+	// return emailMatcher.MatchString(email)
+}
+
+// IsChineseMobile check if the string is chinese mobile number.
+//
+//	@Description: 是否手机号
+//	@param mobileNum
+//	@return bool
+func IsChineseMobile(mobileNum string) bool {
+	return chineseMobileMatcher.MatchString(mobileNum)
+}
+
+// IsChineseIdNum
+//
+//	@Description: 是否身份证
+//	@param id
+//	@return bool
+func IsChineseIdNum(id string) bool {
+	// All characters should be numbers, and the last digit can be either x or X
+	if !chineseIdMatcher.MatchString(id) {
+		return false
+	}
+
+	// Verify province codes and complete all province codes according to GB/T2260
+	_, ok := provinceKv[id[0:2]]
+	if !ok {
+		return false
+	}
+
+	// Verify birthday, must be greater than birthStartYear and less than the current year
+	birthStr := fmt.Sprintf("%s-%s-%s", id[6:10], id[10:12], id[12:14])
+	birthday, err := time.Parse("2006-01-02", birthStr)
+	if err != nil || birthday.After(time.Now()) || birthday.Year() < birthStartYear {
+		return false
+	}
+
+	// Verification code
+	sum := 0
+	for i, c := range id[:17] {
+		v, _ := strconv.Atoi(string(c))
+		sum += v * factor[i]
+	}
+
+	return verifyStr[sum%11] == strings.ToUpper(id[17:18])
+}
+
+// IsChinese
+//
+//	@Description: 是否包含中文
+//	@param s
+//	@return bool
+func IsChinese(s string) bool {
+	return chineseMatcher.MatchString(s)
+}
+func IsCreditCard(creditCart string) bool {
+	return creditCardMatcher.MatchString(creditCart)
+}
+
+// IsASCII
+//
+//	@Description: 是否ascii
+//	@param str
+//	@return bool
+func IsASCII(str string) bool {
+	for i := 0; i < len(str); i++ {
+		if str[i] > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
+}
+
+// IsBase64
+//
+//	@Description: 是否base64
+//	@param base64
+//	@return bool
+func IsBase64(base64 string) bool {
+	return base64Matcher.MatchString(base64)
+}
+
+// GetOsBits
+//
+//	@Description: 获取系统位数
+//	@return int
+func GetOsBits() int {
+	return 32 << (^uint(0) >> 63)
+}
+
+// IsEmpty[T comparable]
+//
+//	@Description: 判断是否为空,0,""都是空
+//	@param v
+//	@return bool
+func IsEmpty[T comparable](v T) bool {
+	var zero T
+	return zero == v
+}
+
+// IsNumber
+//
+//	@Description: 是否数字
+//	@param v
+//	@return bool
+func IsNumber(v any) bool {
+	return IsInt(v) || IsFloat(v)
+}
+
+// IsFloat
+//
+//	@Description: 是否浮点数
+//	@param v
+//	@return bool
+func IsFloat(v any) bool {
+	switch v.(type) {
+	case float32, float64:
+		return true
+	}
+	return false
+}
+
+// IsInt
+//
+//	@Description: 是否整数
+//	@param v
+//	@return bool
+func IsInt(v any) bool {
+	switch v.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr:
+		return true
+	}
+	return false
+}
+
+// IsWeixin
+//
+//	@Description: 是否微信
+//	@param r
+//	@return bool
+func IsWeixin(r *http.Request) bool {
+	if strings.Index(r.UserAgent(), "icroMessenger") == -1 {
+		return false
+	} else {
+		return true
+	}
+}
+
+// IsString
+//
+//	@Description: 是否字符串
+//	@param v
+//	@return bool
+func IsString(v any) bool {
+	if v == nil {
+		return false
+	}
+	switch v.(type) {
+	case string:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsGBK
+//
+//	@Description: 是否GBK
+//	@param data
+//	@return bool
+func IsGBK(data []byte) bool {
+	i := 0
+	for i < len(data) {
+		if data[i] <= 0xff {
+			i++
+			continue
+		} else {
+			if data[i] >= 0x81 &&
+				data[i] <= 0xfe &&
+				data[i+1] >= 0x40 &&
+				data[i+1] <= 0xfe &&
+				data[i+1] != 0xf7 {
+				i += 2
+				continue
+			} else {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// IsUtf8
+//
+//	@Description: 是否utf8
+//	@param s
+//	@return bool
+func IsUtf8(s string) bool {
+	return utf8.ValidString(s)
+}
+
+// IsJSON
+//
+//	@Description: 是否json
+//	@param str
+//	@return bool
+func IsJSON(str string) bool {
+	var js json.RawMessage
+	return json.Unmarshal([]byte(str), &js) == nil
+}
+
+// IsIp
+//
+//	@Description: 是否IP
+//	@param ipstr
+//	@return bool
+func IsIp(ipstr string) bool {
+	ip := net.ParseIP(ipstr)
+	return ip != nil
+}
+
+// IsIpV6
+//
+//	@Description: 是否ipv6
+//	@param ipstr
+//	@return bool
+func IsIpV6(ipstr string) bool {
+	ip := net.ParseIP(ipstr)
+	if ip == nil {
+		return false
+	}
+	return ip.To4() == nil && len(ip) == net.IPv6len
+}
+
+// IsUrl
+//
+//	@Description: 是否url
+//	@param str
+//	@return bool
+func IsUrl(str string) bool {
+	if str == "" || len(str) >= 2083 || len(str) <= 3 || strings.HasPrefix(str, ".") {
+		return false
+	}
+	u, err := url.Parse(str)
+	if err != nil {
+		return false
+	}
+	if strings.HasPrefix(u.Host, ".") {
+		return false
+	}
+	if u.Host == "" && (u.Path != "" && !strings.Contains(u.Path, ".")) {
+		return false
+	}
+
+	return urlMatcher.MatchString(str)
+}
+
+// IsStrongPassword
+//
+//	@Description: 是否强密码
+//	@param password
+//	@param length
+//	@return bool
+func IsStrongPassword(password string, length int) bool {
+	if len(password) < length {
+		return false
+	}
+	var num, lower, upper, special bool
+	for _, r := range password {
+		switch {
+		case unicode.IsDigit(r):
+			num = true
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsLower(r):
+			lower = true
+		case unicode.IsSymbol(r), unicode.IsPunct(r):
+			special = true
+		}
+	}
+
+	return num && lower && upper && special
+}
+
+// IsWeakPassword
+//
+//	@Description: 是否弱密码数字或大小写
+//	@param password
+//	@return bool
+func IsWeakPassword(password string) bool {
+	var num, letter, special bool
+	for _, r := range password {
+		switch {
+		case unicode.IsDigit(r):
+			num = true
+		case unicode.IsLetter(r):
+			letter = true
+		case unicode.IsSymbol(r), unicode.IsPunct(r):
+			special = true
+		}
+	}
+
+	return (num || letter) && !special
+}
+
+// IsHex
+//
+//	@Description: 是否16进制
+//	@param v
+//	@return bool
+func IsHex(v string) bool {
+	return hexMatcher.MatchString(v)
+}
+
+// IsBase64URL
+//
+//	@Description: 是否base64url
+//	@param v
+//	@return bool
+func IsBase64URL(v string) bool {
+	return base64URLMatcher.MatchString(v)
+}
+
+// IsJWT
+//
+//	@Description: 是否jwt
+//	@param v
+//	@return bool
+func IsJWT(v string) bool {
+	strings1 := strings.Split(v, ".")
+	if len(strings1) != 3 {
+		return false
+	}
+
+	for _, s := range strings1 {
+		if !IsBase64URL(s) {
 			return false
 		}
 	}
@@ -128,25 +1854,726 @@ func IsAsc[T Ordered](slice []T) bool {
 	return true
 }
 
-// 是否降序
-func IsDesc[T Ordered](slice []T) bool {
-	for i := 1; i < len(slice); i++ {
-		if slice[i-1] < slice[i] {
-			return false
+// IsLeapYear
+//
+//	@Description: 是否闰年
+//	@param year
+//	@return bool
+func IsLeapYear(year int) bool {
+	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
+}
+
+// IndexOf[T comparable]
+//
+//	@Description: 元素在数组中首次出现的索引,没有-1
+//	@param collection
+//	@param element
+//	@return int
+func IndexOf[T comparable](collection []T, element T) int {
+	for i := range collection {
+		if collection[i] == element {
+			return i
 		}
 	}
 
-	return true
+	return -1
 }
 
-// 检查切片元素是否是有序的（升序或降序）
-func IsSorted[T Ordered](slice []T) bool {
-	return IsAsc(slice) || IsDesc(slice)
+// Join[T any]
+//
+//	@Description: 分隔符链接切片元素,切片转换字符串用分隔符链接
+//	@param slice
+//	@param separator
+//	@return string
+func Join[T any](slice []T, separator string) string {
+	str := mapss(slice, func(_ int, item T) string {
+		return fmt.Sprint(item)
+	})
+
+	return strings.Join(str, separator)
+}
+func mapss[T any, U any](slice []T, iteratee func(index int, item T) U) []U {
+	result := make([]U, len(slice), cap(slice))
+
+	for i := 0; i < len(slice); i++ {
+		result[i] = iteratee(i, slice[i])
+	}
+
+	return result
+}
+
+// Keys[K comparable, V any]
+//
+//	@Description: 返回map的key组成的切片,去重用Uniq
+//	@param in
+//	@return []K
+func Keys[K comparable, V any](in ...map[K]V) []K {
+	size := 0
+	for i := range in {
+		size += len(in[i])
+	}
+	result := make([]K, 0, size)
+
+	for i := range in {
+		for k := range in[i] {
+			result = append(result, k)
+		}
+	}
+
+	return result
+}
+
+// LastIndexOf[T comparable]
+//
+//	@Description:数组中找到值的最后一次出现的索引，如果找不到该值，则返回 -1
+//	@param collection
+//	@param element
+//	@return int
+func LastIndexOf[T comparable](collection []T, element T) int {
+	length := len(collection)
+
+	for i := length - 1; i >= 0; i-- {
+		if collection[i] == element {
+			return i
+		}
+	}
+
+	return -1
+}
+func Last[T any](collection []T, fallback T) T {
+	i, err := Nth(collection, -1)
+	if err != nil {
+		return fallback
+	}
+	return i
+
+}
+
+// ListFileNames
+//
+//	@Description: 返回目录下所有文件名
+//	@param path
+//	@return []string
+//	@return error
+func ListFileNames(path string) ([]string, error) {
+	if !IsExist(path) {
+		return []string{}, nil
+	}
+
+	fs, err := os.ReadDir(path)
+	if err != nil {
+		return []string{}, err
+	}
+
+	sz := len(fs)
+	if sz == 0 {
+		return []string{}, nil
+	}
+
+	result := []string{}
+	for i := 0; i < sz; i++ {
+		if !fs[i].IsDir() {
+			result = append(result, fs[i].Name())
+		}
+	}
+
+	return result, nil
+}
+
+// MapToSlice[K comparable, V any, R any]
+//
+//	@Description: map转换slice
+//	@param in
+//	@param iteratee
+//	@return []R
+func MapToSlice[K comparable, V any, R any](in map[K]V, iteratee func(key K, value V) R) []R {
+	result := make([]R, 0, len(in))
+
+	for k := range in {
+		result = append(result, iteratee(k, in[k]))
+	}
+
+	return result
+}
+
+// MapToQueryString
+//
+//	var m = map[string]any{
+//	       "c": 3,
+//	       "a": 1,
+//	       "b": 2,
+//	   }  a=1&b=2&c=3
+//		@Description:map转换成http查询
+//		@param param
+//		@return string
+func MapToQueryString(param map[string]any) string {
+	if param == nil {
+		return ""
+	}
+	var keys []string
+	for key := range param {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var build strings.Builder
+	for i, v := range keys {
+		build.WriteString(v)
+		build.WriteString("=")
+		build.WriteString(fmt.Sprintf("%v", param[v]))
+		if i != len(keys)-1 {
+			build.WriteString("&")
+		}
+	}
+	return build.String()
+}
+
+// Average [T Float | Integer]
+//
+//	@Description: 数组求平均值
+//	@param collection
+//	@return T
+func Average[T Float | Integer](collection []T) T {
+	var length = T(len(collection))
+	if length == 0 {
+		return 0
+	}
+	var sum = Sum(collection)
+	return sum / length
+}
+
+// Min[T Ordered]
+//
+//	@Description: 切片求最小值
+//	@param collection
+//	@return T
+func Min[T Ordered](collection []T) T {
+	var min T
+
+	if len(collection) == 0 {
+		return min
+	}
+
+	min = collection[0]
+
+	for i := 1; i < len(collection); i++ {
+		item := collection[i]
+
+		if item < min {
+			min = item
+		}
+	}
+
+	return min
+}
+
+// Max[T Ordered]
+//
+//	@Description: 切片求最大值
+//	@param collection
+//	@return T
+func Max[T Ordered](collection []T) T {
+	var max T
+
+	if len(collection) == 0 {
+		return max
+	}
+
+	max = collection[0]
+
+	for i := 1; i < len(collection); i++ {
+		item := collection[i]
+
+		if item > max {
+			max = item
+		}
+	}
+	return max
+}
+
+// Md5
+//
+//	@Description: 计算字符串md5
+//	@param s
+//	@return string
+func Md5(s string) string {
+	h := md5.New()
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// Nth[T any, N Integer]
+//
+//	@Description: 返回索引处元素
+//	@param collection
+//	@param nth
+//	@return T
+//	@return error
+func Nth[T any, N Integer](collection []T, nth N) (T, error) {
+	n := int(nth)
+	l := len(collection)
+	if n >= l || -n > l {
+		var t T
+		return t, fmt.Errorf("nth: %d out of slice bounds", n)
+	}
+
+	if n >= 0 {
+		return collection[n], nil
+	}
+	return collection[l+n], nil
+}
+
+// Comma[T Float | Integer | string]
+//
+//	@Description: 逗号分割数字或字符串,支持添加前缀
+//	@param value
+//	@param prefixSymbol
+//	@return string
+func Comma[T Float | Integer | string](value T, prefixSymbol string) string {
+	numString := ToString(value)
+
+	_, err := strconv.ParseFloat(numString, 64)
+	if err != nil {
+		return ""
+	}
+
+	isNegative := strings.HasPrefix(numString, "-")
+	if isNegative {
+		numString = numString[1:]
+	}
+
+	index := strings.Index(numString, ".")
+	if index == -1 {
+		index = len(numString)
+	}
+
+	for index > 3 {
+		index -= 3
+		numString = numString[:index] + "," + numString[index:]
+	}
+
+	if isNegative {
+		numString = "-" + numString
+	}
+
+	return prefixSymbol + numString
+}
+
+// ColorHexToRGB
+//
+//	@Description: 十六进制转换rgb
+//	@param colorHex
+//	@return red
+//	@return green
+//	@return blue
+func ColorHexToRGB(colorHex string) (red, green, blue int) {
+	colorHex = strings.TrimPrefix(colorHex, "#")
+	color64, err := strconv.ParseInt(colorHex, 16, 32)
+	if err != nil {
+		return
+	}
+	color := int(color64)
+	return color >> 16, (color & 0x00FF00) >> 8, color & 0x0000FF
+}
+
+// ColorRGBToHex
+//
+//	@Description: rgb转换十六进制
+//	@param red
+//	@param green
+//	@param blue
+//	@return string
+func ColorRGBToHex(red, green, blue int) string {
+	r := strconv.FormatInt(int64(red), 16)
+	g := strconv.FormatInt(int64(green), 16)
+	b := strconv.FormatInt(int64(blue), 16)
+
+	if len(r) == 1 {
+		r = "0" + r
+	}
+	if len(g) == 1 {
+		g = "0" + g
+	}
+	if len(b) == 1 {
+		b = "0" + b
+	}
+
+	return "#" + r + g + b
+}
+
+// PickByKeys[K comparable, V any, Map ~map[K]V]
+//
+//	@Description: 根据给定key选取map
+//	@param in
+//	@param keys
+//	@return Map
+func PickByKeys[K comparable, V any, Map ~map[K]V](in Map, keys []K) Map {
+	r := Map{}
+	for i := range keys {
+		if v, ok := in[keys[i]]; ok {
+			r[keys[i]] = v
+		}
+	}
+	return r
+}
+
+// PickByValues[K comparable, V comparable, Map ~map[K]V]
+//
+//	@Description: 根据值选择map组成的新map
+//	@param in
+//	@param values
+//	@return Map
+func PickByValues[K comparable, V comparable, Map ~map[K]V](in Map, values []V) Map {
+	r := Map{}
+	for k := range in {
+		if Contains(values, in[k]) {
+			r[k] = in[k]
+		}
+	}
+	return r
+}
+
+// Reverse[T any, Slice ~[]T]
+//
+//	@Description: 反序数组
+//	@param collection
+//	@return Slice
+func Reverse[T any, Slice ~[]T](collection Slice) Slice {
+	length := len(collection)
+	half := length / 2
+
+	for i := 0; i < half; i = i + 1 {
+		j := length - 1 - i
+		collection[i], collection[j] = collection[j], collection[i]
+	}
+
+	return collection
+}
+
+// RuneLength
+//
+//	@Description: 中文字符统计
+//	@param str
+//	@return int
+func RuneLength(str string) int {
+	return utf8.RuneCountInString(str)
+}
+
+// RandColor
+//
+//	@Description: 随机颜色
+//	@return string
+func RandColor() string {
+	str := "abcdef0123456789"
+	var s string
+	for i := 0; i < 6; i++ {
+		n := RandInt(0, 16)
+		s += Substring(str, n, 1)
+	}
+	return "#" + s
+}
+
+// Replace[T comparable, Slice ~[]T]
+//
+//	@Description: 替换元素
+//	@param collection
+//	@param old
+//	@param new
+//	@param n -1是全部替换
+//	@return Slice
+func Replace[T comparable, Slice ~[]T](collection Slice, old T, new T, n int) Slice {
+	result := make(Slice, len(collection))
+	copy(result, collection)
+
+	for i := range result {
+		if result[i] == old && n != 0 {
+			result[i] = new
+			n--
+		}
+	}
+
+	return result
+}
+
+// Range[T Integer | Float]
+//
+//	@Description: 生成数组
+//	@param start
+//	@param end
+//	@param step 步长
+//	@return []T
+func Range[T Integer | Float](start, end, step T) []T {
+	var result []T
+	if start == end || step == 0 {
+		return result
+	}
+	if start < end {
+		if step < 0 {
+			return result
+		}
+		for i := start; i < end; i += step {
+			result = append(result, i)
+		}
+		return result
+	}
+	if step > 0 {
+		return result
+	}
+	for i := start; i > end; i += step {
+		result = append(result, i)
+	}
+	return result
+}
+
+// PointDistance
+//
+//	@Description: 计算两个坐标距离
+//	@param x1
+//	@param y1
+//	@param x2
+//	@param y2
+//	@return float64
+func PointDistance(x1, y1, x2, y2 float64) float64 {
+	a := x1 - x2
+	b := y1 - y2
+	c := math.Pow(a, 2) + math.Pow(b, 2)
+
+	return math.Sqrt(c)
+}
+
+// PasswordHash
+//
+//	@Description: 散列密码加密
+//	@param password 密码
+//	@return string 散列密码
+//	@return error
+func PasswordHash(password string) (string, error) {
+	salt, _ := Salt(10)
+	hash, err := Hash(password, salt)
+	return hash, err
+}
+
+// PasswordVerify
+//
+//	@Description: 验证散列密码
+//	@param password 密码
+//	@param hash 散列密码
+//	@return bool
+func PasswordVerify(password, hash string) bool {
+	is := Match(password, hash)
+	return is
+}
+
+// RandomString
+//
+//	@Description:随机字符串,不包含oO
+//	@param size
+//	@param charset
+//	@return string
+func RandomString(size int) string {
+	if size <= 0 {
+		panic("lo.RandomString: Size parameter must be greater than 0")
+	}
+	charset := []rune("abcdefghijklmnpqrstuvwxyzABCDEFGHIJKLMNPQRSTUVWXYZ0123456789")
+	sb := strings.Builder{}
+	sb.Grow(size)
+	letterIdBits := int(math.Log2(float64(nearestPowerOfTwo(len(charset)))))
+	var letterIdMask int64 = 1<<letterIdBits - 1
+	letterIdMax := 63 / letterIdBits
+	for i, cache, remain := size-1, rand.Int64(), letterIdMax; i >= 0; {
+		if remain == 0 {
+			cache, remain = rand.Int64(), letterIdMax
+		}
+		if idx := int(cache & letterIdMask); idx < len(charset) {
+			sb.WriteRune(charset[idx])
+			i--
+		}
+		cache >>= letterIdBits
+		remain--
+	}
+	return sb.String()
+}
+func nearestPowerOfTwo(cap int) int {
+	maximumCapacity := math.MaxInt>>1 + 1
+	n := cap - 1
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	if n < 0 {
+		return 1
+	}
+	if n >= maximumCapacity {
+		return maximumCapacity
+	}
+	return n + 1
+}
+
+// Shuffle[T any, Slice ~[]T]
+//
+//	@Description: 洗牌打乱数组
+//	@param collection
+//	@return Slice
+func Shuffle[T any, Slice ~[]T](collection Slice) Slice {
+	rand.Shuffle(len(collection), func(i, j int) {
+		collection[i], collection[j] = collection[j], collection[i]
+	})
+
+	return collection
+}
+
+// Subset[T any, Slice ~[]T]
+//
+//	@Description: slice截取
+//	@param collection
+//	@param offset 开始
+//	@param length 长度
+//	@return Slice
+func Subset[T any, Slice ~[]T](collection Slice, offset int, length uint) Slice {
+	size := len(collection)
+
+	if offset < 0 {
+		offset = size + offset
+		if offset < 0 {
+			offset = 0
+		}
+	}
+
+	if offset > size {
+		return Slice{}
+	}
+
+	if length > uint(size)-uint(offset) {
+		length = uint(size - offset)
+	}
+
+	return collection[offset : offset+int(length)]
+}
+
+// Sha256
+//
+//	@Description: sha256字符串值
+//	@param str
+//	@return string
+func Sha256(str string) string {
+	sha256 := sha256.New()
+	sha256.Write([]byte(str))
+	return hex.EncodeToString(sha256.Sum([]byte("")))
+}
+
+// Sha512
+//
+//	@Description: sha512值
+//	@param str
+//	@return string
+func Sha512(str string) string {
+	sha512 := sha512.New()
+	sha512.Write([]byte(str))
+	return hex.EncodeToString(sha512.Sum([]byte("")))
+}
+
+// Substring[T ~string]
+//
+//	@Description: 子字符串截取
+//	@param str
+//	@param offset
+//	@param length
+//	@return T
+func Substring(s string, offset int, length uint) string {
+	rs := []rune(s)
+	size := len(rs)
+
+	if offset < 0 {
+		offset = size + offset
+		if offset < 0 {
+			offset = 0
+		}
+	}
+	if offset > size {
+		return ""
+	}
+
+	if length > uint(size)-uint(offset) {
+		length = uint(size - offset)
+	}
+
+	str := string(rs[offset : offset+int(length)])
+
+	return strings.Replace(str, "\x00", "", -1)
+}
+
+// SplitEx
+//
+//	@Description: 字符串分割为切片
+//	@param s
+//	@param sep 分隔符号
+//	@param removeEmptyString 是否移除空字符串
+//	@return []string
+func SplitEx(s, sep string, removeEmptyString bool) []string {
+	if sep == "" {
+		return []string{}
+	}
+
+	n := strings.Count(s, sep) + 1
+	a := make([]string, n)
+	n--
+	i := 0
+	sepSave := 0
+	ignore := false
+
+	for i < n {
+		m := strings.Index(s, sep)
+		if m < 0 {
+			break
+		}
+		ignore = false
+		if removeEmptyString {
+			if s[:m+sepSave] == "" {
+				ignore = true
+			}
+		}
+		if !ignore {
+			a[i] = s[:m+sepSave]
+			s = s[m+len(sep):]
+			i++
+		} else {
+			s = s[m+len(sep):]
+		}
+	}
+
+	var ret []string
+	if removeEmptyString {
+		if s != "" {
+			a[i] = s
+			ret = a[:i+1]
+		} else {
+			ret = a[:i]
+		}
+	} else {
+		a[i] = s
+		ret = a[:i+1]
+	}
+
+	return ret
+}
+
+// Sum[T Float | Integer | Complex]
+//
+//	@Description: 数组求和
+//	@param collection
+//	@return T
+func Sum[T Float | Integer | Complex](collection []T) T {
+	var sum T = 0
+	for i := range collection {
+		sum += collection[i]
+	}
+	return sum
 }
 
 // Sort[T Ordered]
 //
-//	@Description: 对任何有序类型（数字或字符串）的切片进行排序，使用快速排序算法
+//	@Description: 切片排序,数组排序
 //	@param slice
 //	@param sortOrder
 func Sort[T Ordered](slice []T, sortOrder ...string) {
@@ -189,722 +2616,748 @@ func swap[T any](slice []T, i, j int) {
 	slice[i], slice[j] = slice[j], slice[i]
 }
 
-// Filter[V any]
-// Filter([]int64{1, 2, 3, 4},func(a int64,i int)bool{ 返回被2整除
-// return a%2 ==0
-// })
+// RoundToFloat[T Float | Integer]
 //
-//	@Description:刷选集合中元素
-//	@param collection
-//	@param predicate
-//	@return []V
-func Filter[V any](collection []V, predicate func(item V, index int) bool) []V {
-	result := make([]V, 0, len(collection))
+//	@Description: 四舍五入返回 float64
+//	@param x
+//	@param n 保留小数位数
+//	@return float64
+func RoundToFloat[T Float | Integer](x T, n int) float64 {
+	tmp := math.Pow(10.0, float64(n))
+	x *= T(tmp)
+	r := math.Round(float64(x))
+	return r / tmp
+}
 
-	for i, item := range collection {
-		if predicate(item, i) {
-			result = append(result, item)
-		}
+// Percent
+//
+//	@Description: 计算百分比,保留n位小数
+//	@param val
+//	@param total
+//	@param n
+//	@return float64
+func Percent(val, total float64, n int) float64 {
+	if total == 0 {
+		return float64(0)
 	}
+	tmp := val / total * 100
+	result := RoundToFloat(tmp, n)
 
 	return result
 }
 
-// ForEach[T any]
+// RoundToString[T Float | Integer]
 //
-//	@Description: scile循环处理
-//	@param collection item值 index是key
-//	@param iteratee
-func ForEach[T any](collection []T, iteratee func(item T, index int)) {
-	for i, item := range collection {
-		iteratee(item, i)
-	}
-}
-
-// Map[T any, U any]
-//
-//	@Description:对 slice 中的每个元素执行 map 函数以创建一个新切片
-//	@param slice Map(nums,func(_ int, v int) int {
-//		return v + 1
-//	})
-//	@param iteratee
-//	@return []U
-func Map[T any, U any](slice []T, iteratee func(index int, item T) U) []U {
-	result := make([]U, len(slice), cap(slice))
-
-	for i := 0; i < len(slice); i++ {
-		result[i] = iteratee(i, slice[i])
-	}
-
-	return result
-}
-
-// Join[T any]
-//
-//	@Description:用指定的分隔符链接切片元素
-//	@param slice 切片转换字符串
-//	@param separator Join(nums, ",")
+//	@Description: 四舍五入到字符串
+//	@param x
+//	@param n
 //	@return string
-func Join[T any](slice []T, separator string) string {
-	str := Map(slice, func(_ int, item T) string {
-		return fmt.Sprint(item)
-	})
-
-	return strings.Join(str, separator)
+func RoundToString[T Float | Integer](x T, n int) string {
+	tmp := math.Pow(10.0, float64(n))
+	x *= T(tmp)
+	r := math.Round(float64(x))
+	result := strconv.FormatFloat(r/tmp, 'f', n, 64)
+	return result
 }
 
-// InsertAt[T any]
+// RandInt
 //
-//	@Description: 在scile索引位置插入值
-//	@param slice
-//	@param index
-//	@param value
-//	@return []T
-func InsertAt[T any](slice []T, index int, value any) []T {
-	size := len(slice)
-
-	if index < 0 || index > size {
-		return slice
+//	@Description: 随机返回两个整数之间的数
+//	@param min
+//	@param max 不含最大值
+//	@return int
+func RandInt(min, max int) int {
+	if min == max {
+		return min
 	}
 
-	if v, ok := value.(T); ok {
-		slice = append(slice[:index], append([]T{v}, slice[index:]...)...)
-		return slice
+	if max < min {
+		min, max = max, min
 	}
 
-	if v, ok := value.([]T); ok {
-		slice = append(slice[:index], append(v, slice[index:]...)...)
-		return slice
+	if min == 0 && max == math.MaxInt {
+		return rand.Int()
 	}
 
-	return slice
+	return rand.IntN(max-min) + min
 }
 
-// Associate[T any, K comparable, V any]
+// TruncRound[T Float | Integer]
 //
-//	@Description: scile处理成map
+//	@Description: 截断n位小数不四舍五入
+//	@param x
+//	@param n
+//	@return T
+func TruncRound[T Float | Integer](x T, n int) T {
+	floatStr := fmt.Sprintf("%."+strconv.Itoa(n+1)+"f", x)
+	temp := strings.Split(floatStr, ".")
+	var newFloat string
+	if len(temp) < 2 || n >= len(temp[1]) {
+		newFloat = floatStr
+	} else {
+		newFloat = temp[0] + "." + temp[1][:n]
+	}
+	result, _ := strconv.ParseFloat(newFloat, 64)
+	return T(result)
+}
+
+// TableToSlice
 //
-//	Associate([]string("a","bb","cc"), func(str string) (string, int) {
-//		return str, len(str)
-//	})
+//	@Description: html表格转换切片,去除html标签
+//	@param s
+//	@return [][]string
+func TableToSlice(s string) [][]string {
+	re := regexp.MustCompile("<table[^>]*?>")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile("<tbody[^>]*?>")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile("<tr[^>]*?>")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile("<td[^>]*?>")
+	s = re.ReplaceAllString(s, "")
+	s = strings.Replace(s, "</tr>", "{tr}", -1)
+	s = strings.Replace(s, "</td>", "{td}", -1)
+	re = regexp.MustCompile("<[/!]*?[^<>]*?>")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile("([rn])[s]+")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile("&nbsp;")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile("</tbody>")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile("</table>")
+	s = re.ReplaceAllString(s, "")
+	re = regexp.MustCompile(`\s{2,}`)
+	s = re.ReplaceAllString(s, "")
+	s = strings.Replace(s, " ", "", -1)
+	s = strings.Replace(s, "	", "", -1)
+	s = strings.Replace(s, "\r", "", -1)
+	s = strings.Replace(s, "\t", "", -1)
+	s = strings.Replace(s, "\n", "", -1)
+	arr := strings.Split(s, "{tr}")
+	arr = arr[:len(arr)-1]
+	var arr1 [][]string
+	for _, v := range arr {
+		arr2 := strings.Split(v, "{td}")
+		arr2 = arr2[:len(arr2)-1]
+		arr1 = append(arr1, arr2)
+	}
+	return arr1
+}
+
+// FloorToFloat[T Float | Integer]
+// FloorToFloat(3.14159, 2) 3.14
+// FloorToFloat(5, 4) 5
 //
+//	@Description: 向下舍入/去尾法 保留n位
+//	@param x
+//	@param n
+//	@return float64
+func FloorToFloat[T Float | Integer](x T, n int) float64 {
+	tmp := math.Pow(10.0, float64(n))
+	x *= T(tmp)
+	r := math.Floor(float64(x))
+	return r / tmp
+}
+
+// CeilToFloat[T Float | Integer]
+// CeilToFloat(3.14159, 1)3.2
+// CeilToFloat(5, 4) 5
+//
+//	@Description: 向上舍入（进一法），保留n位小数
+//	@param x
+//	@param n
+//	@return float64
+func CeilToFloat[T Float | Integer](x T, n int) float64 {
+	tmp := math.Pow(10.0, float64(n))
+	x *= T(tmp)
+	r := math.Ceil(float64(x))
+	return r / tmp
+}
+
+// StripTags
+//
+//	@Description: 去除HTML中标签
+//	@param content
+//	@return string
+func StripTags(content string) string {
+	re := regexp.MustCompile(`<(.|\n)*?>`)
+	return re.ReplaceAllString(content, "")
+}
+
+// Err
+//
+//	@Description: 显示错误
+//	@param err
+func Err(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+// Sha1
+//
+//	@Description: 计算sha1值
+//	@param str
+//	@return string
+func Sha1(str string) string {
+	sha1 := sha1.New()
+	sha1.Write([]byte(str))
+	return hex.EncodeToString(sha1.Sum([]byte("")))
+}
+
+// Slice[T any, Slice ~[]T]
+//
+//	@Description: 截取切片,不包括结尾索引
+//	@param collection
+//	@param start
+//	@param end
+//	@return Slice
+func Slice[T any, Slice ~[]T](collection Slice, start int, end int) Slice {
+	size := len(collection)
+
+	if start >= end {
+		return Slice{}
+	}
+
+	if start > size {
+		start = size
+	}
+	if start < 0 {
+		start = 0
+	}
+
+	if end > size {
+		end = size
+	}
+	if end < 0 {
+		end = 0
+	}
+
+	return collection[start:end]
+}
+
+// Splice[T any, Slice ~[]T]
+//
+//	@Description: 在索引处插入多个值
+//	@param collection
+//	@param i
+//	@param elements
+//	@return Slice
+func Splice[T any, Slice ~[]T](collection Slice, i int, elements ...T) Slice {
+	sizeCollection := len(collection)
+	sizeElements := len(elements)
+	output := make(Slice, 0, sizeCollection+sizeElements) // preallocate memory for the output slice
+
+	if sizeElements == 0 {
+		return append(output, collection...) // simple copy
+	} else if i > sizeCollection {
+		// positive overflow
+		return append(append(output, collection...), elements...)
+	} else if i < -sizeCollection {
+		// negative overflow
+		return append(append(output, elements...), collection...)
+	} else if i < 0 {
+		// backward
+		i = sizeCollection + i
+	}
+
+	return append(append(append(output, collection[:i]...), elements...), collection[i:]...)
+}
+
+// SliceToMap[T any, K comparable, V any]
+//
+//	@Description: slice转换map
 //	@param collection
 //	@param transform
 //	@return map[K]V
-func Associate[T any, K comparable, V any](collection []T, transform func(item T) (K, V)) map[K]V {
+func SliceToMap[T any, K comparable, V any](collection []T, transform func(item T) (K, V)) map[K]V {
 	result := make(map[K]V, len(collection))
 
-	for _, t := range collection {
-		k, v := transform(t)
+	for i := range collection {
+		k, v := transform(collection[i])
 		result[k] = v
 	}
 
 	return result
 }
 
-// SliceToMap[T any, K comparable, V any]
+// RandomSlice[T any, Slice ~[]T]
 //
-//	@Description:切片转换字典
-//	@param collection
-//	@param transform
-//	@return map[K]V
-func SliceToMap[T any, K comparable, V any](collection []T, transform func(item T) (K, V)) map[K]V {
-	return Associate(collection, transform)
-}
-
-// IsEmpty[T comparable]
-//
-//	@Description: 是否为空 0 "" 是空
-//	@param v
-//	@return bool
-func IsEmpty[T comparable](v T) bool {
-	var zero T
-	return zero == v
-}
-
-// ------------------字典开始-----------------------
-// Keys[K comparable, V any]
-//
-//	@Description: 返回字典key
-//	@param in
-//	@return []K
-func Keys[K comparable, V any](in map[K]V) []K {
-	result := make([]K, 0, len(in))
-
-	for k := range in {
-		result = append(result, k)
-	}
-
-	return result
-}
-
-// Values[K comparable, V any]
-//
-//	@Description: 返回字典值
-//	@param in
-//	@return []V
-func Values[K comparable, V any](in map[K]V) []V {
-	result := make([]V, 0, len(in))
-
-	for _, v := range in {
-		result = append(result, v)
-	}
-
-	return result
-}
-
-// 合并多个map
-func MergeMap[K comparable, V any](maps ...map[K]V) map[K]V {
-	result := make(map[K]V, 0)
-
-	for _, m := range maps {
-		for k, v := range m {
-			result[k] = v
-		}
-	}
-
-	return result
-}
-
-// HasKey[K comparable, V any]
-//
-//	@Description:检查 map 是否包含某个 key
-//	@param m mp := map[string]string{"a": "中国", "b": "日本"}
-//	fmt.Println(yo.HasKey(mp, "a"))
-//	@param key
-//	@return bool
-func HasKey[K comparable, V any](m map[K]V, key K) bool {
-	_, haskey := m[key]
-	return haskey
-}
-
-// Invert[K comparable, V comparable]
-// kv := map[string]int{"foo": 1, "bar": 2, "baz": 3, "new": 3}
-//
-//	@Description: 键值交换
-//	@param in
-//	@return map[V]K
-func Invert[K comparable, V comparable](in map[K]V) map[V]K {
-	out := make(map[V]K, len(in))
-
-	for k, v := range in {
-		out[v] = k
-	}
-
-	return out
-}
-func FilterMap[K comparable, V any](m map[K]V, predicate func(key K, value V) bool) map[K]V {
-	result := make(map[K]V)
-
-	for k, v := range m {
-		if predicate(k, v) {
-			result[k] = v
-		}
-	}
-	return result
-}
-
-// 处理map
-func ForEachMap[K comparable, V any](m map[K]V, iteratee func(key K, value V)) {
-	for k, v := range m {
-		iteratee(k, v)
-	}
-}
-
-// MapToSlice[K comparable, V any, R any]
-//
-//	@Description: map转换scile,可以自己处理逻辑
-//	@param in
-//	@param iteratee
-//	@return []R
-func MapToSlice[K comparable, V any, R any](in map[K]V, iteratee func(key K, value V) R) []R {
-	result := make([]R, 0, len(in))
-
-	for k, v := range in {
-		result = append(result, iteratee(k, v))
-	}
-
-	return result
-}
-
-// RandomString
-//
-//	@Description: 随机字符串
-//	@param size 长度
-//	@param charset
-//	@return string
-func RandomString(size int, charset []rune) string {
-	if size <= 0 {
-		panic("RandomString: Size parameter must be greater than 0")
-	}
-	if len(charset) <= 0 {
-		charset = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-	}
-
-	b := make([]rune, size)
-	possibleCharactersCount := len(charset)
-	for i := range b {
-		b[i] = charset[rand.Intn(possibleCharactersCount)]
-	}
-	return string(b)
-}
-
-// RuneLength
-//
-//	@Description: 计算中文字符长度,len中文算3个,这个算1个
-//	@param str
-//	@return int
-func RuneLength(str string) int {
-	return utf8.RuneCountInString(str)
-}
-
-// Reverse[T any]
-//
-//	@Description: sclie反序
-//	@param collection
-//	@return []T
-func Reverse[T any](collection []T) []T {
-	length := len(collection)
-	half := length / 2
-
-	for i := 0; i < half; i = i + 1 {
-		j := length - 1 - i
-		collection[i], collection[j] = collection[j], collection[i]
-	}
-
-	return collection
-}
-
-// Chunk[T any]
-// Chunk([]int(1,2,3,4), 2) [1,2] [3,4]
-//
-//	@Description: 分割数组,切片，按照个数组成新的切片
-//	@param collection
-//	@param size
-//	@return [][]T
-func Chunk[T any](collection []T, size int) [][]T {
-	if size <= 0 {
-		panic("Second parameter must be greater than 0")
-	}
-
-	chunksNum := len(collection) / size
-	if len(collection)%size != 0 {
-		chunksNum += 1
-	}
-
-	result := make([][]T, 0, chunksNum)
-
-	for i := 0; i < chunksNum; i++ {
-		last := (i + 1) * size
-		if last > len(collection) {
-			last = len(collection)
-		}
-		result = append(result, collection[i*size:last])
-	}
-
-	return result
-}
-
-// ChunkString[T ~string]
-// ChunkString("123456", 2) [1,2][3,4][5,6]
-//
-//	@Description: 分割字符串
-//	@param str
-//	@param size
-//	@return []T
-func ChunkString[T ~string](str T, size int) []T {
-	if size <= 0 {
-		panic("ChunkString: Size parameter must be greater than 0")
-	}
-
-	if len(str) == 0 {
-		return []T{""}
-	}
-
-	if size >= len(str) {
-		return []T{str}
-	}
-
-	var chunks []T = make([]T, 0, ((len(str)-1)/size)+1)
-	currentLen := 0
-	currentStart := 0
-	for i := range str {
-		if currentLen == size {
-			chunks = append(chunks, str[currentStart:i])
-			currentLen = 0
-			currentStart = i
-		}
-		currentLen++
-	}
-	chunks = append(chunks, str[currentStart:])
-	return chunks
-}
-
-// Compact[T comparable]
-// []string{"", "foo", "", "bar", ""} 返回["foo","bar"]
-//
-//	@Description: 返回非空切片的新切片
-//	@param collection
-//	@return []T
-func Compact[T comparable](collection []T) []T {
-	var zero T
-
-	result := make([]T, 0, len(collection))
-
-	for _, item := range collection {
-		if item != zero {
-			result = append(result, item)
-		}
-	}
-
-	return result
-}
-
-// Contains[T comparable]
-//
-//	@Description: 判断sclie是否包含元素
-//	@param collection
-//	@param element
-//	@return bool
-func Contain[T comparable](slice []T, target T) bool {
-	for _, item := range slice {
-		if item == target {
-			return true
-		}
-	}
-
-	return false
-}
-
-// 是否包含子切片
-func ContainSubSlice[T comparable](slice, subSlice []T) bool {
-	for _, v := range subSlice {
-		if !Contain(slice, v) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// Drop[T any]
-//
-//	@Description: 删除scile元素,左边开始,返回新的
-//	@param collection
-//	@param n
-//	@return []T
-func Drop[T any](collection []T, n int) []T {
-	if len(collection) <= n {
-		return make([]T, 0)
-	}
-
-	result := make([]T, 0, len(collection)-n)
-
-	return append(result, collection[n:]...)
-}
-
-// 从右边删除,返回删除后的新切片
-func DropRight[T any](collection []T, n int) []T {
-	if len(collection) <= n {
-		return []T{}
-	}
-
-	result := make([]T, 0, len(collection)-n)
-	return append(result, collection[:len(collection)-n]...)
-}
-
-// DropWhile[T any]
-//
-//	@Description: 左边开始条件删除
-//	@param collection
-//	DropWhile(list, func(val int) bool {
-//		return val > 2
-//	})
-//	@return []T
-func DropWhile[T any](collection []T, predicate func(item T) bool) []T {
-	i := 0
-	for ; i < len(collection); i++ {
-		if !predicate(collection[i]) {
-			break
-		}
-	}
-
-	result := make([]T, 0, len(collection)-i)
-	return append(result, collection[i:]...)
-}
-
-// 右边条件删除
-func DropRightWhile[T any](collection []T, predicate func(item T) bool) []T {
-	i := len(collection) - 1
-	for ; i >= 0; i-- {
-		if !predicate(collection[i]) {
-			break
-		}
-	}
-
-	result := make([]T, 0, i+1)
-	return append(result, collection[:i+1]...)
-}
-
-// Flatten[T any]
-// [][]int{{0, 1, 2}, {3, 4, 5}}=> [0,1,2,3,4,5]
-//
-//	@Description: 转换数组维度
-//	@param collection
-//	@return []T
-func Flatten[T any](collection [][]T) []T {
-	totalLen := 0
-	for i := range collection {
-		totalLen += len(collection[i])
-	}
-
-	result := make([]T, 0, totalLen)
-	for i := range collection {
-		result = append(result, collection[i]...)
-	}
-
-	return result
-}
-
-// Intersect[T comparable]
-// list1 := []int{0, 1, 2, 3, 4, 3}
-//
-//	list2 := []int{3, 4, 3}
-//	@Description: 两个切片 交集
-//	@param list1
-//	@param list2
-//	@return []T
-func Intersect[T comparable](list1 []T, list2 []T) []T {
-	result := []T{}
-	seen := map[T]struct{}{}
-
-	for _, elem := range list1 {
-		seen[elem] = struct{}{}
-	}
-
-	for _, elem := range list2 {
-		if _, ok := seen[elem]; ok {
-			result = append(result, elem)
-		}
-	}
-
-	return result
-}
-
-// Last[T any]
-//
-//	@Description: 返回最后一个值
-//	@param collection
-//	@return T
-//	@return error
-func Last[T any](collection []T) (T, error) {
-	length := len(collection)
-
-	if length == 0 {
-		var t T
-		return t, fmt.Errorf("last: cannot extract the last element of an empty slice")
-	}
-
-	return collection[length-1], nil
-}
-func Empty[T any]() T {
-	var zero T
-	return zero
-}
-
-// Sample[T any]
-//
-//	@Description: 随机返回一个值
-//
-// []int64{1,2,3}
-//
-//	@param collection
-//	@return T
-func Sample[T any](collection []T) T {
-	size := len(collection)
-	if size == 0 {
-		return Empty[T]()
-	}
-
-	return collection[rand.Intn(size)]
-}
-
-// Samples[T any]
-//
-//	@Description: 随即返回指定个数scile
+//	@Description:数组中随机返回n个元素
 //	@param collection
 //	@param count
-//	@return []T
-func Samples[T any](collection []T, count int) []T {
+//	@return Slice
+func RandomSlice[T any, Slice ~[]T](collection Slice, count int) Slice {
 	size := len(collection)
 
-	var copy1 = append([]T{}, collection...)
-	results := []T{}
+	copy := append(Slice{}, collection...)
+
+	results := Slice{}
 
 	for i := 0; i < size && i < count; i++ {
 		copyLength := size - i
 
-		index := rand.Intn(size - i)
-		results = append(results, copy1[index])
-		copy1[index] = copy1[copyLength-1]
-		copy1 = copy1[:copyLength-1]
+		index := rand.IntN(size - i)
+		results = append(results, copy[index])
+
+		// Removes element.
+		// It is faster to swap with last element and remove it.
+		copy[index] = copy[copyLength-1]
+		copy = copy[:copyLength-1]
 	}
 
 	return results
 }
 
-// Shuffle[T any]
-// Shuffle([]string{"a", "bb", "c", "ee"})
+// Times[T any]
 //
-//	@Description: 打乱数组
-//	@param collection
+//	@Description: 调用多次迭代
+//	@param count
+//	@param iteratee
 //	@return []T
-func Shuffle[T any](collection []T) []T {
-	rand.Shuffle(len(collection), func(i, j int) {
-		collection[i], collection[j] = collection[j], collection[i]
-	})
+func Times[T any](count int, iteratee func(index int) T) []T {
+	result := make([]T, count)
 
-	return collection
+	for i := 0; i < count; i++ {
+		result[i] = iteratee(i)
+	}
+
+	return result
 }
 
-// Ternary[T any]
+// Timestamp
 //
-//	@Description: 三元运算符 字符串
-//	@param condition
-//	@param ifOutput
-//	@param elseOutput
-//	@return T
-func Ternary[T any](condition bool, ifOutput T, elseOutput T) T {
-	if condition {
-		return ifOutput
-	}
-
-	return elseOutput
-}
-
-// TernaryF[T any]
-//
-//	@Description: 三元运算符函数
-//	@param condition
-//	@param ifFunc
-//	@param elseFunc
-//	@return T
-func TernaryF[T any](condition bool, ifFunc func() T, elseFunc func() T) T {
-	if condition {
-		return ifFunc()
-	}
-
-	return elseFunc()
-}
-
-/**
- * @Description: 将utf-8编码的字符串转换为GBK编码
- * @param str 要转换字符串
- * @return string
- */
-func Utf2Gbk(str string) string {
-	ret, _ := GBK.NewEncoder().String(str)
-	return ret
-	b, _ := GBK.NewEncoder().Bytes([]byte(str))
-	return string(b)
-}
-
-/**
- * @Description: 将GBK编码的字符串转换为utf-8编码
- * @param gbkStr
- * @return string
- */
-func Gbk2Utf8(gbkStr string) string {
-	ret, _ := GBK.NewDecoder().String(gbkStr)
-	return ret
-	b, _ := GBK.NewDecoder().Bytes([]byte(gbkStr))
-	return string(b)
-}
-
-// 转换成布尔
-func ToBool(s string) (bool, error) {
-	return strconv.ParseBool(s)
-}
-
-// 转换字节 ToChar("abc") [a,b,c]
-func ToChar(s string) []string {
-	c := make([]string, 0)
-	if len(s) == 0 {
-		c = append(c, "")
-	}
-	for _, v := range s {
-		c = append(c, string(v))
-	}
-	return c
-}
-
-// ToFloat
-//
-//	@Description: 转换成浮点数 float64
-//	@param value
-//	@return float64
-//	@return error
-func ToFloat(value any) (float64, error) {
-	v := reflect.ValueOf(value)
-
-	result := 0.0
-	err := fmt.Errorf("ToInt: unvalid interface type %T", value)
-	switch value.(type) {
-	case int, int8, int16, int32, int64:
-		result = float64(v.Int())
-		return result, nil
-	case uint, uint8, uint16, uint32, uint64:
-		result = float64(v.Uint())
-		return result, nil
-	case float32, float64:
-		result = v.Float()
-		return result, nil
-	case string:
-		result, err = strconv.ParseFloat(v.String(), 64)
-		if err != nil {
-			result = 0.0
-		}
-		return result, err
-	default:
-		return result, err
-	}
-}
-
-// ToInt
-//
-//	@Description: 转换成int64
-//	@param value
+//	@Description: 当前秒级时间戳
+//	@param timezone
 //	@return int64
-//	@return error
-func ToInt(value any) (int64, error) {
-	v := reflect.ValueOf(value)
+func Timestamp(timezone ...string) int64 {
+	t := time.Now()
 
-	var result int64
-	err := fmt.Errorf("ToInt: invalid value type %T", value)
-	switch value.(type) {
-	case int, int8, int16, int32, int64:
-		result = v.Int()
-		return result, nil
-	case uint, uint8, uint16, uint32, uint64:
-		result = int64(v.Uint())
-		return result, nil
-	case float32, float64:
-		result = int64(v.Float())
-		return result, nil
-	case string:
-		result, err = strconv.ParseInt(v.String(), 0, 64)
+	if timezone != nil && timezone[0] != "" {
+		loc, err := time.LoadLocation(timezone[0])
 		if err != nil {
-			result = 0
+			return 0
 		}
-		return result, err
-	default:
-		return result, err
+
+		t = t.In(loc)
 	}
+
+	return t.Unix()
+}
+
+// TimestampToTime
+//
+//	@Description: 时间戳转换go时间
+//	@param t
+//	@return time.Time
+func TimestampToTime(t int64) time.Time {
+	const timeLayout = "2006-01-02 15:04:05"
+	str := time.Unix(t, 0).Format(timeLayout)
+	t1, _ := TimestrToTime(str, "yyyy-mm-dd hh:mm:ss")
+	return t1
+}
+
+// TimestampToStr
+//
+//	@Description: 时间戳转换时间字符串
+//	@param t
+//	@return string
+func TimestampToStr(t int64) string {
+	return TimeToStr(TimestampToTime(t), "yyyy-mm-dd hh:mm:ss")
+}
+
+// TimeAddMinute
+//
+//	@Description: 添加减少分钟
+//	@param t
+//	@param minute
+//	@return time.Time
+func TimeAddMinute(t time.Time, minute int64) time.Time {
+	return t.Add(time.Minute * time.Duration(minute))
+}
+
+// TimeAddHour add or sub hour to the time.
+//
+//	@Description: 添加减少小时
+//	@param t
+//	@param hour
+//	@return time.Time
+func TimeAddHour(t time.Time, hour int64) time.Time {
+	return t.Add(time.Hour * time.Duration(hour))
+}
+
+// TimeAddDay
+//
+//	@Description: 加减日期,实现昨天明天
+//	@param t
+//	@param day
+//	@return time.Time
+func TimeAddDay(t time.Time, day int64) time.Time {
+	return t.Add(24 * time.Hour * time.Duration(day))
+}
+
+// TimeAddYear
+//
+//	@Description: 添加减少年
+//	@param t
+//	@param year
+//	@return time.Time
+func TimeAddYear(t time.Time, year int64) time.Time {
+	return t.Add(365 * 24 * time.Hour * time.Duration(year))
+}
+
+// TimeDaysBetween
+//
+//	@Description: 日期之间天数差
+//	@param start
+//	@param end
+//	@return int
+func TimeDaysBetween(start, end time.Time) int {
+	duration := end.Sub(start)
+	days := int(duration.Hours() / 24)
+
+	return days
+}
+
+// GetDate
+//
+//	@Description: 日期
+//	@return string
+func GetDate() string {
+	return time.Now().Format("2006-01-02")
+}
+
+// GetTime
+//
+//	@Description: 时间
+//	@return string
+func GetTime() string {
+	return time.Now().Format("15:04:05")
+}
+
+// GetDateTime
+//
+//	@Description: 日期时间
+//	@return string
+func GetDateTime() string {
+	return time.Now().Format("2006-01-02 15:04:05")
+}
+
+// GetAppPath
+//
+//	@Description: 获取当前程序路径
+//	@return string
+func GetAppPath() string {
+	file, _ := exec.LookPath(os.Args[0])
+	path, _ := filepath.Abs(file)
+	index := strings.LastIndex(path, string(os.PathSeparator))
+	return path[:index]
+}
+
+// GetIps
+//
+//	@Description: 获取本地ip列表
+//	@return []string
+func GetIps() []string {
+	var ips []string
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ips
+	}
+
+	for _, addr := range addrs {
+		ipNet, isValid := addr.(*net.IPNet)
+		if isValid && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				ips = append(ips, ipNet.IP.String())
+			}
+		}
+	}
+	return ips
+}
+func GetPinyin(s, sp string) (pinyin, shortpinyin string) {
+	n := utf8.RuneCountInString(s)
+	var list []string
+	for i := 0; i < n; i++ {
+		list = append(list, Substring(s, i, 1))
+	}
+	for _, v := range list {
+		pin, isok := dict[v]
+		if isok {
+			pinyin += pin + sp
+			shortpinyin += Substring(pin, 0, 1)
+		} else {
+			pinyin += v
+			shortpinyin += Substring(v, 0, 1)
+		}
+
+	}
+	return pinyin, shortpinyin
+}
+
+// HideString
+//
+//	@Description:隐藏字符串中某些字符
+//	@param origin
+//	@param start 开始
+//	@param end 结束
+//	@param replaceChar 要替换如 *
+//	@return string
+func HideString(origin string, start, end int, replaceChar string) string {
+	size := len(origin)
+
+	if start > size-1 || start < 0 || end < 0 || start > end {
+		return origin
+	}
+
+	if end > size {
+		end = size
+	}
+
+	if replaceChar == "" {
+		return origin
+	}
+
+	startStr := origin[0:start]
+	endStr := origin[end:size]
+
+	replaceSize := end - start
+	replaceStr := strings.Repeat(replaceChar, replaceSize)
+
+	return startStr + replaceStr + endStr
+}
+
+// IsPublicIP
+//
+//	@Description: 是否公网IP
+//	@param IP
+//	@return bool
+func IsPublicIP(IP net.IP) bool {
+	if IP.IsLoopback() || IP.IsLinkLocalMulticast() || IP.IsLinkLocalUnicast() {
+		return false
+	}
+	if ip4 := IP.To4(); ip4 != nil {
+		switch {
+		case ip4[0] == 10:
+			return false
+		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
+			return false
+		case ip4[0] == 192 && ip4[1] == 168:
+			return false
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// IsInternalIP
+//
+//	@Description: 是否内网IP
+//	@param IP
+//	@return bool
+func IsInternalIP(IP net.IP) bool {
+	if IP.IsLoopback() {
+		return true
+	}
+	if ip4 := IP.To4(); ip4 != nil {
+		return ip4[0] == 10 ||
+			(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
+			(ip4[0] == 169 && ip4[1] == 254) ||
+			(ip4[0] == 192 && ip4[1] == 168)
+	}
+	return false
+}
+
+// GetInternalIp
+//
+//	@Description: 获取内部ipv4
+//	@return string
+func GetInternalIp() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+
+		if ip != nil && (ip.IsLinkLocalUnicast() || ip.IsGlobalUnicast()) {
+			continue
+		}
+
+		if ipv4 := ip.To4(); ipv4 != nil {
+			return ipv4.String()
+		}
+	}
+
+	return ""
+}
+
+// GetMacAddrs
+//
+//	@Description: 获取Mac地址
+//	@return []string
+func GetMacAddrs() []string {
+	var macAddrs []string
+
+	nets, err := net.Interfaces()
+	if err != nil {
+		return macAddrs
+	}
+
+	for _, net := range nets {
+		macAddr := net.HardwareAddr.String()
+		if len(macAddr) == 0 {
+			continue
+		}
+		macAddrs = append(macAddrs, macAddr)
+	}
+
+	return macAddrs
+}
+
+// EncodeUrl
+// ?a=1&b=[2] -> ?a=1&b=%5B2%5D
+//
+//	@Description: 编码url
+//	@param urlStr
+//	@return string
+//	@return error
+func EncodeUrl(urlStr string) (string, error) {
+	URL, err := url.Parse(urlStr)
+	if err != nil {
+		return "", err
+	}
+
+	URL.RawQuery = URL.Query().Encode()
+
+	return URL.String(), nil
+}
+
+// TimeToStr
+//
+//	@Description: 时间转换字符串格式化
+//	@param t
+//	@param format
+//	@param timezone
+//	@return string
+func TimeToStr(t time.Time, format string, timezone ...string) string {
+	tf, ok := timeFormat[strings.ToLower(format)]
+	if !ok {
+		return ""
+	}
+
+	if timezone != nil && timezone[0] != "" {
+		loc, err := time.LoadLocation(timezone[0])
+		if err != nil {
+			return ""
+		}
+		return t.In(loc).Format(tf)
+	}
+	return t.Format(tf)
+}
+
+// TimestrToTime
+//
+//	@Description: 字符串转换go时间格式
+//	@param str
+//	@param format
+//	@param timezone
+//	@return time.Time
+//	@return error
+func TimestrToTime(str, format string, timezone ...string) (time.Time, error) {
+	tf, ok := timeFormat[strings.ToLower(format)]
+	if !ok {
+		return time.Time{}, fmt.Errorf("format %s not support", format)
+	}
+
+	if timezone != nil && timezone[0] != "" {
+		loc, err := time.LoadLocation(timezone[0])
+		if err != nil {
+			return time.Time{}, err
+		}
+
+		return time.ParseInLocation(tf, str, loc)
+	}
+
+	return time.Parse(tf, str)
+}
+
+// TimestrToTimestamp
+//
+//	@Description: 时间字符串转换时间戳
+//	@param s
+//	@return int64
+func TimestrToTimestamp(s string) int64 {
+	const timeLayout = "2006-01-02 15:04:05"
+	loc := time.FixedZone("CST", 8*3600)
+	tt, _ := time.ParseInLocation(timeLayout, s, loc)
+	return tt.Unix()
+}
+
+// TimeLine
+//
+//	@Description: 时间戳友好显示
+//	@param t
+//	@return string
+func TimeLine(t int64) string {
+	now := time.Now().Unix()
+	var xx string
+	if now <= t {
+		xx = TimeToStr(TimestampToTime(t), "yyyy-mm-dd hh:mm:ss")
+	} else {
+		t = now - t
+		f := map[int]string{
+			31536000: "年",
+			2592000:  "个月",
+			604800:   "星期",
+			86400:    "天",
+			3600:     "小时",
+			60:       "分钟",
+			1:        "秒"}
+		var keys []int
+		for k := range f {
+			keys = append(keys, k)
+		}
+		sort.Sort(sort.Reverse(sort.IntSlice(keys)))
+		for _, v := range keys {
+			k1 := int64(v)
+			x := t / k1
+			if x != 0 {
+				x1 := strconv.FormatInt(x, 10)
+				xx = x1 + f[v] + "前"
+				break
+			}
+		}
+	}
+	return xx
+}
+
+// ToAnySlice[T any]
+//
+//	@Description: 转换成any类型切片
+//	@param collection
+//	@return []any
+func ToAnySlice[T any](collection []T) []any {
+	result := make([]any, len(collection))
+	for i := range collection {
+		result[i] = collection[i]
+	}
+	return result
 }
 
 // ToString
 //
-//	@Description: 将值转换为字符串，对于数字、字符串、[]byte，将转换为字符串。 对于其他类型（切片、映射、数组、结构）将调用 json.Marshal
+//	@Description: 任意类型转换字符串
 //	@param value
 //	@return string
 func ToString(value any) string {
@@ -947,17 +3400,59 @@ func ToString(value any) string {
 			return ""
 		}
 		return string(b)
-
-		// todo: maybe we should't supprt other type conversion
-		// v := reflect.ValueOf(value)
-		// log.Panicf("Unsupported data type: %s ", v.String())
-		// return ""
 	}
+}
+
+// ToUrlBase64
+//
+//	@Description: 转换成urlbase64
+//	@param value
+//	@return string
+func ToUrlBase64(value any) string {
+	if value == nil || (reflect.ValueOf(value).Kind() == reflect.Ptr && reflect.ValueOf(value).IsNil()) {
+		return ""
+	}
+	switch value.(type) {
+	case []byte:
+		return base64.URLEncoding.EncodeToString(value.([]byte))
+	case string:
+		return base64.URLEncoding.EncodeToString([]byte(value.(string)))
+	case error:
+		return base64.URLEncoding.EncodeToString([]byte(value.(error).Error()))
+	default:
+		marshal, err := json.Marshal(value)
+		if err != nil {
+			return ""
+		}
+		return base64.URLEncoding.EncodeToString(marshal)
+	}
+}
+
+// ToBool
+//
+//	@Description: 转换成布尔
+//	@param s
+//	@return bool
+//	@return error
+func ToBool(s string) (bool, error) {
+	return strconv.ParseBool(s)
+}
+
+// ToSlice[T any]
+//
+//	@Description: 字符转换成切片
+//	@param items
+//	@return []T
+func ToSlice[T any](items ...T) []T {
+	result := make([]T, len(items))
+	copy(result, items)
+
+	return result
 }
 
 // ToBytes
 //
-//	@Description: interface 转字节切片
+//	@Description: 转换成字节切片
 //	@param value
 //	@return []byte
 //	@return error
@@ -1000,6 +3495,29 @@ func ToBytes(value any) ([]byte, error) {
 		return newValue, err
 	}
 }
+
+// ToChar
+//
+//	@Description: 转换字符切片
+//	@param s
+//	@return []string
+func ToChar(s string) []string {
+	c := make([]string, 0)
+	if len(s) == 0 {
+		c = append(c, "")
+	}
+	for _, v := range s {
+		c = append(c, string(v))
+	}
+	return c
+}
+
+// ToJson
+//
+//	@Description: 转换json
+//	@param value
+//	@return string
+//	@return error
 func ToJson(value any) (string, error) {
 	result, err := json.Marshal(value)
 	if err != nil {
@@ -1009,292 +3527,319 @@ func ToJson(value any) (string, error) {
 	return string(result), nil
 }
 
-// ToMap[T any, K comparable, V any]
+// ToFloat
 //
-//	@Description:将切片转为 map
-//	@param array
-//	@param iteratee
-//	@return map[K]V
-func ToMap[T any, K comparable, V any](array []T, iteratee func(T) (K, V)) map[K]V {
-	result := make(map[K]V, len(array))
-	for _, item := range array {
-		k, v := iteratee(item)
-		result[k] = v
+//	@Description: 转换float
+//	@param value
+//	@return float64
+//	@return error
+func ToFloat(value any) (float64, error) {
+	v := reflect.ValueOf(value)
+
+	result := 0.0
+	err := fmt.Errorf("ToInt: unvalid interface type %T", value)
+	switch value.(type) {
+	case int, int8, int16, int32, int64:
+		result = float64(v.Int())
+		return result, nil
+	case uint, uint8, uint16, uint32, uint64:
+		result = float64(v.Uint())
+		return result, nil
+	case float32, float64:
+		result = v.Float()
+		return result, nil
+	case string:
+		result, err = strconv.ParseFloat(v.String(), 64)
+		if err != nil {
+			result = 0.0
+		}
+		return result, err
+	default:
+		return result, err
+	}
+}
+
+// ToInt
+//
+//	@Description: 转换int
+//	@param value
+//	@return int64
+//	@return error
+func ToInt(value any) (int64, error) {
+	v := reflect.ValueOf(value)
+
+	var result int64
+	err := fmt.Errorf("ToInt: invalid value type %T", value)
+	switch value.(type) {
+	case int, int8, int16, int32, int64:
+		result = v.Int()
+		return result, nil
+	case uint, uint8, uint16, uint32, uint64:
+		result = int64(v.Uint())
+		return result, nil
+	case float32, float64:
+		result = int64(v.Float())
+		return result, nil
+	case string:
+		result, err = strconv.ParseInt(v.String(), 0, 64)
+		if err != nil {
+			result = 0
+		}
+		return result, err
+	default:
+		return result, err
+	}
+}
+
+// Ternary[T any]
+//
+//	@Description:三元运算,相当于if-else,是语句
+//	@param condition
+//	@param ifOutput
+//	@param elseOutput
+//	@return T
+func Ternary[T any](condition bool, ifOutput T, elseOutput T) T {
+	if condition {
+		return ifOutput
+	}
+
+	return elseOutput
+}
+
+// TernaryF[T any]
+//
+//	@Description: 三元运算,是函数
+//	@param condition
+//	@param ifFunc
+//	@param elseFunc
+//	@return T
+func TernaryF[T any](condition bool, ifFunc func() T, elseFunc func() T) T {
+	if condition {
+		return ifFunc()
+	}
+
+	return elseFunc()
+}
+
+var (
+	DefaultTrimChars = string([]byte{
+		'\t', // Tab.
+		'\v', // Vertical tab.
+		'\n', // New line (line feed).
+		'\r', // Carriage return.
+		'\f', // New page.
+		' ',  // Ordinary space.
+		0x00, // NUL-byte.
+		0x85, // Delete.
+		0xA0, // Non-breaking space.
+	})
+)
+
+// Trim
+//
+//	@Description: 去除字符串两边空格
+//	@param str
+//	@param characterMask 可指定其他去除字符
+//	@return string
+func Trim(str string, characterMask ...string) string {
+	trimChars := DefaultTrimChars
+
+	if len(characterMask) > 0 {
+		trimChars += characterMask[0]
+	}
+
+	return strings.Trim(str, trimChars)
+}
+
+// Typeof
+//
+//	@Description: 返回变量类型
+//	@param a
+//	@return reflect.Type
+func Typeof(a any) reflect.Type {
+	return reflect.TypeOf(a)
+}
+
+// Uniq[T comparable, Slice ~[]T]
+//
+//	@Description:返回数组的无重复版本
+//	@param collection
+//	@return Slice
+func Uniq[T comparable, Slice ~[]T](collection Slice) Slice {
+	result := make(Slice, 0, len(collection))
+	seen := make(map[T]struct{}, len(collection))
+
+	for i := range collection {
+		if _, ok := seen[collection[i]]; ok {
+			continue
+		}
+
+		seen[collection[i]] = struct{}{}
+		result = append(result, collection[i])
 	}
 
 	return result
 }
-func StructToMap(value any) map[string]any {
-	t := reflect.TypeOf(value)
-	v := reflect.ValueOf(value)
 
-	var data = make(map[string]any)
-	for i := 0; i < t.NumField(); i++ {
-		data[t.Field(i).Name] = v.Field(i).Interface()
-	}
-	return data
-}
-
-// 颜色值十六进制转 rgb
-func ColorHexToRGB(colorHex string) (red, green, blue int) {
-	colorHex = strings.TrimPrefix(colorHex, "#")
-	color64, err := strconv.ParseInt(colorHex, 16, 32)
-	if err != nil {
-		return
-	}
-	color := int(color64)
-	return color >> 16, (color & 0x00FF00) >> 8, color & 0x0000FF
-}
-
-// 颜色值 rgb 转十六进制
-func ColorRGBToHex(red, green, blue int) string {
-	r := strconv.FormatInt(int64(red), 16)
-	g := strconv.FormatInt(int64(green), 16)
-	b := strconv.FormatInt(int64(blue), 16)
-
-	if len(r) == 1 {
-		r = "0" + r
-	}
-	if len(g) == 1 {
-		g = "0" + g
-	}
-	if len(b) == 1 {
-		b = "0" + b
-	}
-
-	return "#" + r + g + b
-}
-
-// ToInterface
-// 将反射值转换成对应的 interface 类型
+// UniqBy[T any, U comparable, Slice ~[]T]
 //
-//	@Description:
-//	@param v
-//	@return value
-//	@return ok
-func ToInterface(v reflect.Value) (value interface{}, ok bool) {
-	if v.IsValid() && v.CanInterface() {
-		return v.Interface(), true
-	}
-	switch v.Kind() {
-	case reflect.Bool:
-		return v.Bool(), true
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return v.Int(), true
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return v.Uint(), true
-	case reflect.Float32, reflect.Float64:
-		return v.Float(), true
-	case reflect.Complex64, reflect.Complex128:
-		return v.Complex(), true
-	case reflect.String:
-		return v.String(), true
-	case reflect.Ptr:
-		return ToInterface(v.Elem())
-	case reflect.Interface:
-		return ToInterface(v.Elem())
-	default:
-		return nil, false
-	}
-}
-func Md5(s string) string {
-	h := md5.New()
-	h.Write([]byte(s))
-	return hex.EncodeToString(h.Sum(nil))
-}
-func Sha1(str string) string {
-	sha1 := sha1.New()
-	sha1.Write([]byte(str))
-	return hex.EncodeToString(sha1.Sum([]byte("")))
-}
-func Sha256(str string) string {
-	sha256 := sha256.New()
-	sha256.Write([]byte(str))
-	return hex.EncodeToString(sha256.Sum([]byte("")))
-}
-func Base64Encode(s string, isurl bool) (s1 string) {
-	if isurl == true {
-		s1 = base64.URLEncoding.EncodeToString([]byte(s))
-	} else {
-		s1 = base64.StdEncoding.EncodeToString([]byte(s))
-	}
-	return s1
-}
+//	@Description: 返回无重复数组处理后结果
+//	@param collection
+//	@param iteratee
+//	@return Slice
+func UniqBy[T any, U comparable, Slice ~[]T](collection Slice, iteratee func(item T) U) Slice {
+	result := make(Slice, 0, len(collection))
+	seen := make(map[U]struct{}, len(collection))
 
-/**
- * @Description: 解码base64 str=php.Base64Decode(str,false)
- * @param s 要解码字符串
- * @param isurl 是否url
- * @return string
- */
-func Base64Decode(s string, isurl bool) string {
-	var s1 []byte
-	x := len(s) * 3 % 4
-	switch {
-	case x == 2:
-		s += "=="
-	case x == 1:
-		s += "="
-	}
-	if isurl == true {
-		s1, _ = base64.URLEncoding.DecodeString(s)
-	} else {
-		s1, _ = base64.StdEncoding.DecodeString(s)
-	}
-	return string(s1)
-}
+	for i := range collection {
+		key := iteratee(collection[i])
 
-// 判断文件或目录是否存在
-func IsExist(path string) bool {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false
-	}
-	return false
-}
-
-// 创建文件，创建成功返回 true, 否则返回 false
-func CreateFile(path string) bool {
-	file, err := os.Create(path)
-	if err != nil {
-		return false
-	}
-
-	defer file.Close()
-	return true
-}
-
-// 创建嵌套目录，例如/a/, /a/b/
-func CreateDir(absPath string) error {
-	// return os.MkdirAll(path.Dir(absPath), os.ModePerm)
-	return os.MkdirAll(absPath, os.ModePerm)
-}
-
-// 判断参数是否是目录
-func IsDir(path string) bool {
-	file, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return file.IsDir()
-}
-
-// 删除文件
-func RemoveFile(path string) error {
-	return os.Remove(path)
-}
-
-// 拷贝文件，会覆盖原有的文件
-func CopyFile(srcPath string, dstPath string) error {
-	srcFile, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	distFile, err := os.Create(dstPath)
-	if err != nil {
-		return err
-	}
-	defer distFile.Close()
-
-	var tmp = make([]byte, 1024*4)
-	for {
-		n, err := srcFile.Read(tmp)
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		_, err = distFile.Write(tmp[:n])
-		if err != nil {
-			return err
-		}
-	}
-}
-
-// 读文件
-func ReadFile(path string) (string, error) {
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(bytes), nil
-}
-
-// 按行读取文件内容，返回字符串切片包含每一行
-func ReadFileByLine(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	result := make([]string, 0)
-	buf := bufio.NewReader(f)
-
-	for {
-		line, _, err := buf.ReadLine()
-		l := string(line)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		result = append(result, l)
+
+		seen[key] = struct{}{}
+		result = append(result, collection[i])
 	}
 
-	return result, nil
+	return result
 }
 
-// 目录下所有文件名称
-func ListFile(path string) ([]string, error) {
-	if !IsExist(path) {
-		return []string{}, nil
+// Utf8ToGbk
+//
+//	@Description: uft8转gbk
+//	@param bs
+//	@return []byte
+//	@return error
+func Utf8ToGbk(bs []byte) []byte {
+	b, _ :=GBK.NewEncoder().Bytes(bs)
+	return b
+}
+
+// GbkToUtf8
+//
+//	@Description: gbk转换utf8
+//	@param bs
+//	@return []byte
+//	@return error
+func GbkToUtf8(bs []byte) []byte {
+	b, _ := GBK.NewDecoder().Bytes(bs)
+	return b
+
+}
+
+// Get
+//
+//	@Description: get请求http
+//	@param u
+//	@return string
+func Get(u string) string {
+	rs, _ := http.Get(u)
+	defer rs.Body.Close()
+	body, _ := io.ReadAll(rs.Body)
+	if IsGBK(body) {
+		return string(GbkToUtf8(body))
+	}
+	return string(body)
+}
+
+// Utf8ToUnicode
+//
+//	@Description: uft8转换unicode
+//	@param str
+//	@return string
+func Utf8ToUnicode(str string) string {
+	str1 := strconv.QuoteToASCII(str)
+	return str1[1 : len(str1)-1]
+}
+
+// UnicodeToUtf8
+// @Description: unicode转换utf8
+// @param str
+// @return string utf8
+func UnicodeToUtf8(str string) string {
+	str1, _ := strconv.Unquote(strings.Replace(strconv.Quote(str), `\\u`, `\u`, -1))
+	return str1
+}
+
+// Union[T comparable, Slice ~[]T]
+//
+//	@Description: 并集
+//	@param lists
+//	@return Slice
+func Union[T comparable, Slice ~[]T](lists ...Slice) Slice {
+	var capLen int
+
+	for _, list := range lists {
+		capLen += len(list)
 	}
 
-	fs, err := os.ReadDir(path)
-	if err != nil {
-		return []string{}, err
-	}
+	result := make(Slice, 0, capLen)
+	seen := make(map[T]struct{}, capLen)
 
-	sz := len(fs)
-	if sz == 0 {
-		return []string{}, nil
-	}
-
-	result := []string{}
-	for i := 0; i < sz; i++ {
-		if !fs[i].IsDir() {
-			result = append(result, fs[i].Name())
+	for i := range lists {
+		for j := range lists[i] {
+			if _, ok := seen[lists[i][j]]; !ok {
+				seen[lists[i][j]] = struct{}{}
+				result = append(result, lists[i][j])
+			}
 		}
 	}
 
-	return result, nil
+	return result
 }
 
-// 判断是否zip
-func IsZipFile(filepath string) bool {
-	f, err := os.Open(filepath)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	buf := make([]byte, 4)
-	if n, err := f.Read(buf); err != nil || n < 4 {
-		return false
-	}
-
-	return bytes.Equal(buf, []byte("PK\x03\x04"))
+// Uniqid
+//
+//	@Description: 生成时间戳随机字符串
+//	@param prefix 前缀
+//	@return string
+func Uniqid(prefix string) string {
+	now := time.Now()
+	return fmt.Sprintf("%s%08x%05x", prefix, now.Unix(), now.UnixNano()%0x100000)
 }
 
-// 压缩文件 可以是文件或目录
+// Values[K comparable, V any]
+//
+//	@Description: 返回map的val组成的新切片
+//	@param in
+//	@return []V
+func Values[K comparable, V any](in ...map[K]V) []V {
+	size := 0
+	for i := range in {
+		size += len(in[i])
+	}
+	result := make([]V, 0, size)
+
+	for i := range in {
+		for k := range in[i] {
+			result = append(result, in[i][k])
+		}
+	}
+
+	return result
+}
+
+// ValueOr[K comparable, V any]
+//
+//	@Description: 根据key返回map值,不存在返回默认值
+//	@param in
+//	@param key
+//	@param fallback 默认值
+//	@return V
+func ValueOr[K comparable, V any](in map[K]V, key K, fallback V) V {
+	if v, ok := in[key]; ok {
+		return v
+	}
+	return fallback
+}
+
+// Zip
+//
+//	@Description: 压缩文件或目录到zip
+//	@param path
+//	@param destPath
+//	@return error
 func Zip(path string, destPath string) error {
 	if IsDir(path) {
 		return zipFolder(path, destPath)
@@ -1406,7 +3951,12 @@ func addFileToArchive2(w *zip.Writer, basePath, baseInZip string) error {
 	return nil
 }
 
-// 解压zip
+// UnZip
+//
+//	@Description: 解压zip
+//	@param zipFile
+//	@param destPath
+//	@return error
 func UnZip(zipFile string, destPath string) error {
 	zipReader, err := zip.OpenReader(zipFile)
 	if err != nil {
@@ -1415,7 +3965,7 @@ func UnZip(zipFile string, destPath string) error {
 	defer zipReader.Close()
 
 	for _, f := range zipReader.File {
-		//issue#62: fix ZipSlip bug
+		// issue#62: fix ZipSlip bug
 		path, err := safeFilepathJoin(destPath, f.Name)
 		if err != nil {
 			return err
@@ -1454,7 +4004,12 @@ func UnZip(zipFile string, destPath string) error {
 	return nil
 }
 
-// 单个文件或目录添加到zip
+// ZipAppendEntry
+//
+//	@Description: 通过将单个文件或目录追加到现有的zip文件
+//	@param fpath
+//	@param destPath
+//	@return error
 func ZipAppendEntry(fpath string, destPath string) error {
 	tempFile, err := os.CreateTemp("", "temp.zip")
 	if err != nil {
@@ -1510,6 +4065,7 @@ func ZipAppendEntry(fpath string, destPath string) error {
 
 	return CopyFile(tempFile.Name(), destPath)
 }
+
 func safeFilepathJoin(path1, path2 string) (string, error) {
 	relPath, err := filepath.Rel(".", path2)
 	if err != nil || strings.HasPrefix(relPath, "..") {
@@ -1521,765 +4077,13 @@ func safeFilepathJoin(path1, path2 string) (string, error) {
 	return filepath.Join(path1, filepath.Join("/", relPath)), nil
 }
 
-// 获取文件 mime 类型, 参数的类型必须是 string 或者*os.File
-func MiMeType(file any) string {
-	var mediatype string
-
-	readBuffer := func(f *os.File) ([]byte, error) {
-		buffer := make([]byte, 512)
-		_, err := f.Read(buffer)
-		if err != nil {
-			return nil, err
-		}
-		return buffer, nil
-	}
-
-	if filePath, ok := file.(string); ok {
-		f, err := os.Open(filePath)
-		if err != nil {
-			return mediatype
-		}
-		buffer, err := readBuffer(f)
-		if err != nil {
-			return mediatype
-		}
-		return http.DetectContentType(buffer)
-	}
-
-	if f, ok := file.(*os.File); ok {
-		buffer, err := readBuffer(f)
-		if err != nil {
-			return mediatype
-		}
-		return http.DetectContentType(buffer)
-	}
-	return mediatype
-}
-
-// 返回绝对路径
-func CurrentPath() string {
-	var absPath string
-	_, filename, _, ok := runtime.Caller(1)
-	if ok {
-		absPath = path.Dir(filename)
-	}
-
-	return absPath
-}
-
-// 文件大小 字节
-func FileSize(path string) (int64, error) {
-	f, err := os.Stat(path)
-	if err != nil {
-		return 0, err
-	}
-	return f.Size(), nil
-}
-
-// FileCount
+// CliInput
 //
-//	@Description: 文件格式化
-//	@param sizes
-//	@return string
-func FileCount(sizes int64) string {
-	a := [...]string{"B", "KB", "MB", "GB", "TB", "PB"}
-	pos := 0
-	s := float64(sizes)
-	for s >= 1024 {
-		s = s / 1024
-		pos++
-	}
-	c := strconv.FormatFloat(s, 'f', 2, 64)
-	return c + " " + a[pos]
-}
-
-// 文件修改时间戳
-func MTime(filepath string) (int64, error) {
-	f, err := os.Stat(filepath)
-	if err != nil {
-		return 0, err
-	}
-	return f.ModTime().Unix(), nil
-}
-
-// 读取csv
-func ReadCsvFile(filepath string) ([][]string, error) {
-	f, err := os.Open(filepath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	csvReader := csv.NewReader(f)
-	records, err := csvReader.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	return records, nil
-}
-
-// 写入csv
-func WriteCsvFile(filepath string, records [][]string, append bool) error {
-	flag := os.O_RDWR | os.O_CREATE
-
-	if append {
-		flag = flag | os.O_APPEND
-	}
-
-	f, err := os.OpenFile(filepath, flag, 0644)
-	if err != nil {
-		return err
-	}
-
-	defer f.Close()
-
-	writer := csv.NewWriter(f)
-	writer.Comma = ','
-
-	return writer.WriteAll(records)
-}
-
-// 写入文件字符
-func WriteFile(filepath string, content string, append bool) error {
-	var flag int
-	if append {
-		flag = os.O_RDWR | os.O_CREATE | os.O_APPEND
-	} else {
-		flag = os.O_RDWR | os.O_CREATE | os.O_TRUNC
-	}
-
-	f, err := os.OpenFile(filepath, flag, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = f.WriteString(content)
-	return err
-}
-
-// 四舍五入到 float64 n位保留
-func RoundToString(x float64, n int) string {
-	tmp := math.Pow(10.0, float64(n))
-	x *= tmp
-	x = math.Round(x)
-	result := strconv.FormatFloat(x/tmp, 'f', n, 64)
-	return result
-}
-
-// 四舍五入到字符串
-func RoundToFloat(x float64, n int) float64 {
-	tmp := math.Pow(10.0, float64(n))
-	x *= tmp
-	x = math.Round(x)
-	return x / tmp
-}
-
-// Sum[T Float | Integer | Complex]
-//
-//	@Description: 求和
-//	@param collection
-//	@return T
-func Sum[T Float | Integer | Complex](collection []T) T {
-	var sum T = 0
-	for _, val := range collection {
-		sum += val
-	}
-	return sum
-}
-func Max[T Ordered](collection []T) T {
-	var max T
-
-	if len(collection) == 0 {
-		return max
-	}
-
-	max = collection[0]
-
-	for i := 1; i < len(collection); i++ {
-		item := collection[i]
-
-		if item > max {
-			max = item
-		}
-	}
-
-	return max
-}
-func Min[T Ordered](collection []T) T {
-	var min T
-
-	if len(collection) == 0 {
-		return min
-	}
-
-	min = collection[0]
-
-	for i := 1; i < len(collection); i++ {
-		item := collection[i]
-
-		if item < min {
-			min = item
-		}
-	}
-
-	return min
-}
-
-// Range[T Integer | Float]
-//
-//	@Description: 生成数组
-//	@param start Range(1,5)
-//	@param elementNum
-//	@return []T
-func Range[T Integer | Float](start T, elementNum int) []T {
-	var length int
-	var step int
-	if elementNum < 0 {
-		length = -elementNum
-	} else {
-		length = elementNum
-	}
-	result := make([]T, length)
-	if elementNum < 0 {
-		step = -1
-	} else {
-		step = 1
-	}
-	for i, j := 0, start; i < length; i, j = i+1, j+T(step) {
-		result[i] = j
-	}
-	return result
-}
-
-// 平均数
-func Average[T Integer | Float](numbers ...T) T {
-	var sum T
-	n := T(len(numbers))
-
-	for _, v := range numbers {
-		sum += v
-	}
-	return sum / n
-}
-
-// 计算百分比
-func Percent(val, total float64, n int) float64 {
-	if total == 0 {
-		return float64(0)
-	}
-	tmp := val / total * 100
-	result := RoundToFloat(tmp, n)
-
-	return result
-}
-
-// 截断小数n位 不四舍五入
-func TruncRound(x float64, n int) float64 {
-	floatStr := fmt.Sprintf("%."+strconv.Itoa(n+1)+"f", x)
-	temp := strings.Split(floatStr, ".")
-	var newFloat string
-	if len(temp) < 2 || n >= len(temp[1]) {
-		newFloat = floatStr
-	} else {
-		newFloat = temp[0] + "." + temp[1][:n]
-	}
-	result, _ := strconv.ParseFloat(newFloat, 64)
-	return result
-}
-
-// 根据指定的起始值，结束值，步长，创建一个数字切片
-func RangeWithStep[T Integer | Float](start, end, step T) []T {
-	result := []T{}
-
-	if start >= end || step == 0 {
-		return result
-	}
-
-	for i := start; i < end; i += step {
-		result = append(result, i)
-	}
-
-	return result
-}
-
-// 计算两坐标点距离
-func PointDistance(x1, y1, x2, y2 float64) float64 {
-	a := x1 - x2
-	b := y1 - y2
-	c := math.Pow(a, 2) + math.Pow(b, 2)
-
-	return math.Sqrt(c)
-}
-
-// 下载文件
-func DownloadFile(filepath string, url string) error {
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	out, err := os.Create(filepath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-
-	return err
-}
-
-// 随机一个值
-func RandInt(min, max int) int {
-	if min == max {
-		return min
-	}
-	if max < min {
-		min, max = max, min
-	}
-	return rand.Intn(max-min) + min
-}
-
-/**
- * @Description: 四舍五入,分割字符
- * @param number 浮点数
- * @param decimals 保留位数2
- * @param decPoint .
- * @param thousandsSep , 分隔符
- * @return string
- */
-func NumberFormat(number float64, decimals int, decPoint, thousandsSep string) string {
-	neg := false
-	if number < 0 {
-		number = -number
-		neg = true
-	}
-	dec := int(decimals)
-	// Will round off
-	str := fmt.Sprintf("%."+strconv.Itoa(dec)+"F", number)
-	prefix, suffix := "", ""
-	if dec > 0 {
-		prefix = str[:len(str)-(dec+1)]
-		suffix = str[len(str)-dec:]
-	} else {
-		prefix = str
-	}
-	sep := []byte(thousandsSep)
-	n, l1, l2 := 0, len(prefix), len(sep)
-	// thousands sep num
-	c := (l1 - 1) / 3
-	tmp := make([]byte, l2*c+l1)
-	pos := len(tmp) - 1
-	for i := l1 - 1; i >= 0; i, n, pos = i-1, n+1, pos-1 {
-		if l2 > 0 && n > 0 && n%3 == 0 {
-			for j := range sep {
-				tmp[pos] = sep[l2-j-1]
-				pos--
-			}
-		}
-		tmp[pos] = prefix[i]
-	}
-	s := string(tmp)
-	if dec > 0 {
-		s += decPoint + suffix
-	}
-	if neg {
-		s = "-" + s
-	}
-
-	return s
-}
-func UUIdV4() (string, error) {
-	uuid := make([]byte, 16)
-
-	n, err := io.ReadFull(crand.Reader, uuid)
-	if n != len(uuid) || err != nil {
-		return "", err
-	}
-
-	uuid[8] = uuid[8]&^0xc0 | 0x80
-	uuid[6] = uuid[6]&^0xf0 | 0x40
-
-	return fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:]), nil
-}
-func IsWindows() bool {
-	return runtime.GOOS == "windows"
-}
-func IsLinux() bool {
-	return runtime.GOOS == "linux"
-}
-func IsMac() bool {
-	return runtime.GOOS == "darwin"
-}
-
-// 获取当前操作系统位数(32/64)
-func GetOsBits() int {
-	return 32 << (^uint(0) >> 63)
-}
-func IsASCII(str string) bool {
-	for i := 0; i < len(str); i++ {
-		if str[i] > unicode.MaxASCII {
-			return false
-		}
-	}
-	return true
-}
-func IsJSON(str string) bool {
-	var js json.RawMessage
-	return json.Unmarshal([]byte(str), &js) == nil
-}
-func IsIp(ipstr string) bool {
-	ip := net.ParseIP(ipstr)
-	return ip != nil
-}
-func IsUrl(str string) bool {
-	if str == "" || len(str) >= 2083 || len(str) <= 3 || strings.HasPrefix(str, ".") {
-		return false
-	}
-	u, err := url.Parse(str)
-	if err != nil {
-		return false
-	}
-	if strings.HasPrefix(u.Host, ".") {
-		return false
-	}
-	if u.Host == "" && (u.Path != "" && !strings.Contains(u.Path, ".")) {
-		return false
-	}
-	var urlMatcher *regexp.Regexp = regexp.MustCompile(`^((ftp|http|https?):\/\/)?(\S+(:\S*)?@)?((([1-9]\d?|1\d\d|2[01]\d|22[0-3])(\.(1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.([0-9]\d?|1\d\d|2[0-4]\d|25[0-4]))|(([a-zA-Z0-9]+([-\.][a-zA-Z0-9]+)*)|((www\.)?))?(([a-z\x{00a1}-\x{ffff}0-9]+-?-?)*[a-z\x{00a1}-\x{ffff}0-9]+)(?:\.([a-z\x{00a1}-\x{ffff}]{2,}))?))(:(\d{1,5}))?((\/|\?|#)[^\s]*)?$`)
-	return urlMatcher.MatchString(str)
-}
-func IsEmail(email string) bool {
-	var emailMatcher *regexp.Regexp = regexp.MustCompile(`\w+([-+.]\w+)*@\w+([-.]\w+)*\.\w+([-.]\w+)*`)
-	return emailMatcher.MatchString(email)
-}
-
-// 是否手机号
-func IsMobile(mobileNum string) bool {
-	var chineseMobileMatcher *regexp.Regexp = regexp.MustCompile(`^1(?:3\d|4[4-9]|5[0-35-9]|6[67]|7[013-8]|8\d|9\d)\d{8}$`)
-	return chineseMobileMatcher.MatchString(mobileNum)
-}
-
-// 是否身份证
-func IsChineseIdNum(id string) bool {
-	var chineseIdMatcher *regexp.Regexp = regexp.MustCompile(`^[1-9]\d{5}(18|19|20|21|22)\d{2}((0[1-9])|(1[0-2]))(([0-2][1-9])|10|20|30|31)\d{3}[0-9Xx]$`)
-	return chineseIdMatcher.MatchString(id)
-}
-
-func IsChinese(s string) bool {
-	var chineseMatcher *regexp.Regexp = regexp.MustCompile("[\u4e00-\u9fa5]")
-	return chineseMatcher.MatchString(s)
-}
-func IsBase64(base64 string) bool {
-	var base64Matcher *regexp.Regexp = regexp.MustCompile(`^(?:[A-Za-z0-9+\\/]{4})*(?:[A-Za-z0-9+\\/]{2}==|[A-Za-z0-9+\\/]{3}=|[A-Za-z0-9+\\/]{4})$`)
-	return base64Matcher.MatchString(base64)
-}
-
-// 验证字符串是否是强密码：（字母+数字+特殊字符)
-func IsStrongPassword(password string, length int) bool {
-	if len(password) < length {
-		return false
-	}
-	var num, lower, upper, special bool
-	for _, r := range password {
-		switch {
-		case unicode.IsDigit(r):
-			num = true
-		case unicode.IsUpper(r):
-			upper = true
-		case unicode.IsLower(r):
-			lower = true
-		case unicode.IsSymbol(r), unicode.IsPunct(r):
-			special = true
-		}
-	}
-
-	return num && lower && upper && special
-}
-func IsGBK(data []byte) bool {
-	i := 0
-	for i < len(data) {
-		if data[i] <= 0xff {
-			i++
-			continue
-		} else {
-			if data[i] >= 0x81 &&
-				data[i] <= 0xfe &&
-				data[i+1] >= 0x40 &&
-				data[i+1] <= 0xfe &&
-				data[i+1] != 0xf7 {
-				i += 2
-				continue
-			} else {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-func IsUtf8(s string) bool {
-	return utf8.ValidString(s)
-}
-func IsWeixin(r *http.Request) bool {
-	if strings.Index(r.UserAgent(), "icroMessenger") == -1 {
-		return false
-	} else {
-		return true
-	}
-}
-
-// 是否是数字
-func IsNumber(v any) bool {
-	return IsInt(v) || IsFloat(v)
-}
-
-// 是否浮点
-func IsFloat(v any) bool {
-	switch v.(type) {
-	case float32, float64:
-		return true
-	}
-	return false
-}
-
-// 是否整数
-func IsInt(v any) bool {
-	switch v.(type) {
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr:
-		return true
-	}
-	return false
-}
-
-// 判断是否周日
-func IsWeekend(t time.Time) bool {
-	return time.Saturday == t.Weekday() || time.Sunday == t.Weekday()
-}
-
-// 是否闰年
-func IsLeapYear(year int) bool {
-	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
-}
-
-// 数据类型获取
-func Typeof(a any) reflect.Type {
-	return reflect.TypeOf(a)
-}
-
-// 时间戳
-func Time() int64 {
-	return time.Now().Unix()
-}
-
-// Date
-//
-//	@Description: 格式化时间
-//	@param format Y-m-d H:i:s
-//	@param ts 事件类型
-//	@return string
-func Date(format string, ts ...time.Time) string {
-	patterns := []string{
-		// 年
-		"Y", "2006", // 4 位数字完整表示的年份
-		"y", "06", // 2 位数字表示的年份
-
-		// 月
-		"m", "01", // 数字表示的月份，有前导零
-		"n", "1", // 数字表示的月份，没有前导零
-		"M", "Jan", // 三个字母缩写表示的月份
-		"F", "January", // 月份，完整的文本格式，例如 January 或者 March
-
-		// 日
-		"d", "02", // 月份中的第几天，有前导零的 2 位数字
-		"j", "2", // 月份中的第几天，没有前导零
-
-		"D", "Mon", // 星期几，文本表示，3 个字母
-		"l", "Monday", // 星期几，完整的文本格式;L的小写字母
-
-		// 时间
-		"g", "3", // 小时，12 小时格式，没有前导零
-		"G", "15", // 小时，24 小时格式，没有前导零
-		"h", "03", // 小时，12 小时格式，有前导零
-		"H", "15", // 小时，24 小时格式，有前导零
-
-		"a", "pm", // 小写的上午和下午值
-		"A", "PM", // 小写的上午和下午值
-
-		"i", "04", // 有前导零的分钟数
-		"s", "05", // 秒数，有前导零
-	}
-	replacer := strings.NewReplacer(patterns...)
-	format = replacer.Replace(format)
-
-	t := time.Now()
-	if len(ts) > 0 {
-		t = ts[0]
-	}
-	return t.Format(format)
-}
-
-// Timestr2Time
-//
-//	@Description: 时间字符串转换时间类;
+//	@Description: cli输入
 //	@param str
-//	@return time.Time
-func Timestr2Time(str string) time.Time {
-	const Layout = "2006-01-02 15:04:05" //时间常量
-	loc, _ := time.LoadLocation("Asia/Shanghai")
-	times, _ := time.ParseInLocation(Layout, str, loc)
-	return times
-}
-
-// Unix2Time
-//
-//	@Description: 时间戳转换时间类型
-//	@param t
-//	@return time.Time
-func Unix2Time(t int64) time.Time {
-	const timeLayout = "2006-01-02 15:04:05"
-	str := time.Unix(t, 0).Format(timeLayout)
-	return Timestr2Time(str)
-}
-
-// Str2Time
-//
-//	@Description: 时间字符串转换时间戳
-//	@param s
-//	@return int64
-func Str2Time(s string) int64 {
-	const timeLayout = "2006-01-02 15:04:05"
-	loc, _ := time.LoadLocation("Local")
-	tmp, _ := time.ParseInLocation(timeLayout, s, loc)
-	timestamp := tmp.Unix()
-	return timestamp
-}
-
-// TimeLine
-//
-//	@Description: 时间友好显示
-//	@param t 时间戳
+//	@param check nil
 //	@return string
-func TimeLine(t int64) string {
-	now := time.Now().Unix()
-	var xx string
-	if now <= t {
-		xx = Date("Y-m-d H:i:s", Unix2Time(t))
-	} else {
-		t = now - t
-		f := map[int]string{
-			31536000: "年",
-			2592000:  "个月",
-			604800:   "星期",
-			86400:    "天",
-			3600:     "小时",
-			60:       "分钟",
-			1:        "秒"}
-		var keys []int
-		for k := range f {
-			keys = append(keys, k)
-		}
-		sort.Sort(sort.Reverse(sort.IntSlice(keys)))
-		for _, v := range keys {
-			k1 := int64(v)
-			x := t / k1
-			if x != 0 {
-				x1 := strconv.FormatInt(x, 10)
-				xx = x1 + f[v] + "前"
-				break
-			}
-		}
-	}
-	return xx
-}
-
-/**
- * @Description: 返回当前 Unix 时间戳和微秒数
- * @return float64
- */
-func MicroTime() float64 {
-	loc, _ := time.LoadLocation("UTC")
-	now := time.Now().In(loc)
-	micSeconds := float64(now.Nanosecond()) / 1000000000
-	return float64(now.Unix()) + micSeconds
-}
-
-// 根据年月日判断星期 2021-03-17
-func GetWeekday(ri string) string {
-	var weekday = [7]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
-	t := Timestr2Time(ri + " 00:00:00")
-	n := int(t.Weekday())
-	return weekday[n]
-}
-
-// 获取exe路径
-func GetAppPath() string {
-	file, _ := exec.LookPath(os.Args[0])
-	path, _ := filepath.Abs(file)
-	index := strings.LastIndex(path, string(os.PathSeparator))
-	return path[:index]
-}
-
-// Uniqid
-//
-//	@Description: 生成随机字符串
-//	@param prefix 前缀
-//	@return string
-func Uniqid(prefix string) string {
-	now := time.Now()
-	return fmt.Sprintf("%s%08x%05x", prefix, now.Unix(), now.UnixNano()%0x100000)
-}
-
-/**
- * @Description: 创建密码散列,password 密码
- * @param password 要加密字符串
- * @return string
- * @return error
- */
-func PasswordHash(password string) (string, error) {
-	salt, _ := Salt(10)
-	hash, err := Hash(password, salt)
-	return hash, err
-}
-
-/**
- * @Description: 验证密码,密码和密码散列
- * @param password 密码
- * @param hash 上面生成的散列密码
- * @return bool
- */
-func PasswordVerify(password, hash string) bool {
-	is := Match(password, hash)
-	return is
-}
-
-/**
- * @Description: 去除字符中HTML标记
- * @param content 字符串
- * @return string
- */
-func StripTags(content string) string {
-	re := regexp.MustCompile(`<(.|\n)*?>`)
-	return re.ReplaceAllString(content, "")
-}
-
-// 显示错误
-func Err(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-/**
- * @Description: cli实现提示输入 qq:=php.Ask("请输入",nil)
- * @param str 提示字符串
- * @param check nil
- * @return string
- */
-func Ask(str string, check func(string) error) string {
+func CliInput(str string, check func(string) error) string {
 	if check == nil {
 		check = func(in string) error {
 			if len(in) > 0 {
@@ -2307,44 +4111,38 @@ func Ask(str string, check func(string) error) string {
 	}
 }
 
-// cli选择
-var RenderChooseQuestion = func(question string) string {
+var renderChooseQuestion = func(question string) string {
 	return question + "\n"
 }
-var RenderChooseOption = func(key, value string, size int) string {
+var renderChooseOption = func(key, value string, size int) string {
 	return fmt.Sprintf("%-"+fmt.Sprintf("%d", size+1)+"s %s\n", key+")", value)
 }
-var RenderChooseQuery = func() string {
+var renderChooseQuery = func() string {
 	return "Choose: "
 }
 
-/*
-*
-  - @Description: cli选择
-  - @param question 提示内容
-  - @param choices  map[string]string{
-    "1":  "苹果",
-    "2": "橘子",
-    "3":   "西瓜",
-    }
-  - @return string 返回key
-*/
-func Choose(question string, choices map[string]string) string {
-	options := RenderChooseQuestion(question)
+// CliSelect
+//
+//	@Description: cli选择多项
+//	@param question
+//	@param choices
+//	@return string
+func CliSelect(question string, choices map[string]string) string {
+	options := renderChooseQuestion(question)
 	keys := []string{}
-	max := 0
+	max1 := 0
 	for k, _ := range choices {
-		if l := len(k); l > max {
-			max = l
+		if l := len(k); l > max1 {
+			max1 = l
 		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		options += RenderChooseOption(k, choices[k], max)
+		options += renderChooseOption(k, choices[k], max1)
 	}
-	options += RenderChooseQuery()
-	return Ask(options, func(in string) error {
+	options += renderChooseQuery()
+	return CliInput(options, func(in string) error {
 		if _, ok := choices[in]; ok {
 			return nil
 		} else {
@@ -2353,667 +4151,25 @@ func Choose(question string, choices map[string]string) string {
 	})
 }
 
-var ConfirmRejection = "<warn>Please respond with \"y\" or \"n\"\n\n"
-var ConfirmYesRegex = regexp.MustCompile(`^(?i)y(es)?$`)
-var ConfirmNoRegex = regexp.MustCompile(`^(?i)no?$`)
+var confirmRejection = "<warn>Please respond with \"y\" or \"n\"\n\n"
+var confirmYesRegex = regexp.MustCompile(`^(?i)y(es)?$`)
+var confirmNoRegex = regexp.MustCompile(`^(?i)no?$`)
 
-/**
- * @Description: cli选择yes/no
- * @param question 提示内容支持回复 yes y/no n
- * @return bool
- */
-func Confirm(question string) bool {
+// CliYesNo
+//
+//	@Description: cli选择yes/no
+//	@param question
+//	@return bool
+func CliYesNo(question string) bool {
 	cb := func(value string) error { return nil }
 	for {
-		res := Ask(question, cb)
-		if ConfirmYesRegex.MatchString(res) {
+		res := CliInput(question, cb)
+		if confirmYesRegex.MatchString(res) {
 			return true
-		} else if ConfirmNoRegex.MatchString(res) {
+		} else if confirmNoRegex.MatchString(res) {
 			return false
 		} else {
-			fmt.Printf(ConfirmRejection)
+			fmt.Printf(confirmRejection)
 		}
 	}
-}
-
-// Map2Http
-//
-//	@Description: map转换成http字符串
-//	@param param map 转换成a=1&b=2&c=3
-//	@return string
-func Map2Http(param map[string]any) string {
-	if param == nil {
-		return ""
-	}
-	var keys []string
-	for key := range param {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var build strings.Builder
-	for i, v := range keys {
-		build.WriteString(v)
-		build.WriteString("=")
-		build.WriteString(fmt.Sprintf("%v", param[v]))
-		if i != len(keys)-1 {
-			build.WriteString("&")
-		}
-	}
-	return build.String()
-}
-
-// GetIp
-//
-//	@Description: 获取IP
-//	@return string
-func GetIp() string {
-	addr, err := net.InterfaceAddrs()
-	if err != nil {
-		panic(err.Error())
-	}
-	for _, a := range addr {
-		if ipNet, ok := a.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
-			if ipNet.IP.To4() != nil {
-				return ipNet.IP.String()
-			}
-		}
-	}
-
-	return ""
-}
-
-// 编码URL
-func EncodeUrl(urlStr string) (string, error) {
-	URL, err := url.Parse(urlStr)
-	if err != nil {
-		return "", err
-	}
-
-	URL.RawQuery = URL.Query().Encode()
-
-	return URL.String(), nil
-}
-
-// 访问url
-func Openurl(url string) {
-	var cmd string
-	var args []string
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start"}
-	case "darwin":
-		cmd = "open"
-	default:
-		cmd = "xdg-open"
-	}
-	args = append(args, url)
-	cmds := exec.Command(cmd, args...)
-	cmds.Start()
-}
-
-/*
-*
-  - @Description: 发送邮件不使用任何扩展
-    from :="logwwwove@qq.com"
-    to1:="yobybxy@163.com,18291448834@163.com"
-    secret := "abc"
-    host :="smtp.qq.com"
-    port := 25
-    subject:="主题"
-    body:="内容是测试"
-    err:=php.SendEmail(from,to1,subject,body,secret,host,port)
-    php.CheckErr(err)
-  - @param from 发送人邮箱
-  - @param to1 收件人邮箱,多个用,隔开"yoby21bxy@163.com,182914114811834@163.com"
-  - @param subject 标题
-  - @param body 内容
-  - @param secret 密钥,qq邮箱授权码密码
-  - @param host 主机地址
-  - @param port 端口25
-  - @return err
-*/
-func SendEmail(from string, to1 string, subject string, body string, secret string, host string, port int) (err error) {
-	to2 := strings.Split(to1, ",")
-	to := to2[0]
-	auth := smtp.PlainAuth("", from, secret, host)
-	msg := []byte("To: " + to + "\r\n" +
-		"Subject: " + subject + "\r\n" +
-		"\r\n" +
-		body + "\r\n")
-	err = smtp.SendMail(host+":"+strconv.Itoa(port), auth, from, to2, msg)
-	return err
-}
-
-/**
- * @Description: 解码emoji网页上显示
- * @param s
- * @return string
- */
-func EmojiDecode(s string) string {
-	re := regexp.MustCompile("\\[[\\\\u0-9a-zA-Z]+\\]")
-	//提取emoji数据表达式
-	reg := regexp.MustCompile("\\[\\\\u|]")
-	src := re.FindAllString(s, -1)
-	for i := 0; i < len(src); i++ {
-		e := reg.ReplaceAllString(src[i], "")
-		p, err := strconv.ParseInt(e, 16, 32)
-		if err == nil {
-			s = strings.Replace(s, src[i], string(rune(p)), -1)
-		}
-	}
-	return s
-}
-
-/**
- * @Description: 编码emoji成unicode
- * @param s
- * @return string
- */
-func EmojiEncode(s string) string {
-	ret := ""
-	rs := []rune(s)
-	for i := 0; i < len(rs); i++ {
-		if len(string(rs[i])) == 4 {
-			u := `[\u` + strconv.FormatInt(int64(rs[i]), 16) + `]`
-			ret += u
-
-		} else {
-			ret += string(rs[i])
-		}
-	}
-	return ret
-}
-
-/**
- * @Description: emoji编码成实体直接输出不需要转码
- * @param s
- * @return ss
- */
-func Emoji(s string) (ss string) {
-	s1 := strings.Split(s, "")
-	for _, v := range s1 {
-		if len(v) >= 4 {
-			vv := []rune(v)
-			k := int(vv[0])
-			ss += "&#" + strconv.Itoa(k) + ";"
-		} else {
-			ss += v
-		}
-	}
-	return
-}
-
-// 字符串截取 字符串 位置 长度
-func Substring(s string, offset int, length uint) string {
-	rs := []rune(s)
-	size := len(rs)
-
-	if offset < 0 {
-		offset = size + offset
-		if offset < 0 {
-			offset = 0
-		}
-	}
-	if offset > size {
-		return ""
-	}
-
-	if length > uint(size)-uint(offset) {
-		length = uint(size - offset)
-	}
-
-	str := string(rs[offset : offset+int(length)])
-
-	return strings.Replace(str, "\x00", "", -1)
-}
-
-/*
-*
-  - @Description: 对称加密解密函数
-  - @param text 要加密或解密字符串
-  - @param false解码 true加密
-
-密钥 字符串
-s:=php.Authcode("1234==+wo我们",true,"abc")
-s=php.Authcode(s,false,"abc")
-  - @return string
-*/
-func Authcode(text string, params ...interface{}) string {
-	l := len(params)
-
-	isEncode := false
-	key := ""
-	expiry := 0
-	cKeyLen := 4
-
-	if l > 0 {
-		isEncode = params[0].(bool)
-	}
-
-	if l > 1 {
-		key = params[1].(string)
-	}
-
-	if l > 2 {
-		expiry = params[2].(int)
-		if expiry < 0 {
-			expiry = 0
-		}
-	}
-
-	if l > 3 {
-		cKeyLen = params[3].(int)
-		if cKeyLen < 0 {
-			cKeyLen = 0
-		}
-	}
-	if cKeyLen > 32 {
-		cKeyLen = 32
-	}
-
-	timestamp := time.Now().Unix()
-
-	// md5加密key
-	mKey := Md5(key)
-
-	// 参与加密的
-	keyA := Md5(mKey[0:16])
-	// 用于验证数据有效性的
-	keyB := Md5(mKey[16:])
-	// 动态部分
-	var keyC string
-	if cKeyLen > 0 {
-		if isEncode {
-			// 加密的时候，动态获取一个秘钥
-			keyC = Md5(fmt.Sprint(timestamp))[32-cKeyLen:]
-		} else {
-			// 解密的时候从头部获取动态秘钥部分
-			keyC = text[0:cKeyLen]
-		}
-	}
-
-	// 加入了动态的秘钥
-	cryptKey := keyA + Md5(keyA+keyC)
-	// 秘钥长度
-	keyLen := len(cryptKey)
-	if isEncode {
-		// 加密 前10位是过期验证字符串 10-26位字符串验证
-		var d int64
-		if expiry > 0 {
-			d = timestamp + int64(expiry)
-		}
-		text = fmt.Sprintf("%010d%s%s", d, Md5(text + keyB)[0:16], text)
-	} else {
-		// 解密
-		text = string(Base64Decode(text[cKeyLen:], false))
-	}
-
-	// 字符串长度
-	textLen := len(text)
-	if textLen <= 0 {
-		return ""
-	}
-
-	// 密匙簿
-	box := Range(0, 256)
-
-	// 对称算法
-	var rndKey []int
-	cryptKeyB := []byte(cryptKey)
-	for i := 0; i < 256; i++ {
-		pos := i % keyLen
-		rndKey = append(rndKey, int(cryptKeyB[pos]))
-	}
-
-	j := 0
-	for i := 0; i < 256; i++ {
-		j = (j + box[i] + rndKey[i]) % 256
-		box[i], box[j] = box[j], box[i]
-	}
-
-	textB := []byte(text)
-	a := 0
-	j = 0
-	var result []byte
-	for i := 0; i < textLen; i++ {
-		a = (a + 1) % 256
-		j = (j + box[a]) % 256
-		box[a], box[j] = box[j], box[a]
-		result = append(result, byte(int(textB[i])^(box[(box[a]+box[j])%256])))
-	}
-
-	if isEncode {
-		return keyC + strings.Replace(Base64Encode(string(result), false), "=", "", -1)
-	}
-
-	// 获取前10位，判断过期时间
-	d, _ := strconv.ParseInt(string(result[0:10]), 10, 0)
-	if (d == 0 || d-timestamp > 0) && string(result[10:26]) == Md5(string(result[26:]) + keyB)[0:16] {
-		return string(result[26:])
-	}
-
-	return ""
-}
-
-/*
-*
-  - @Description: 图片转换成base64
-
-filename:="1.jpg"
-s:=php.Img2Base64(filename)
-  - @param filename
-  - @return s
-*/
-func Img2Base64(filename string) (s string) {
-	ext := filepath.Ext(filename)
-	ext = strings.TrimLeft(ext, ".")
-	srcByte, _ := os.ReadFile(filename)
-	s = Base64Encode(string(srcByte), false)
-	s = "data:image/" + ext + ";base64," + s
-	return
-}
-
-/**
- * @Description: base64还原成图片
- * @param path 当前 . qq/ss 最后不要带/
- * @param data 上传的base64
- * @return ps 路径
- */
-func Base642Img(path, data string) (ps string) {
-	re := regexp.MustCompile(`^(data:\s*image\/(\w+);base64,)`)
-	r := re.FindStringSubmatch(data)
-	ext := r[2]
-	bs := strings.Replace(data, r[1], "", -1)
-	CreateDir(path)
-	ps = path + "/" + Sha1(data) + "." + ext
-	bs = Base64Decode(bs, false)
-	os.WriteFile(ps, []byte(bs), 0666)
-	return ps
-}
-
-/**
- * @Description: 生成随机颜色
- * @return string
- */
-func RandColor() string {
-	str := "abcdef0123456789"
-	var s string
-	for i := 0; i < 6; i++ {
-		n := RandInt(0, 15)
-		time.Sleep(1)
-		s += Substring(str, n, 1)
-	}
-	return "#" + s
-}
-
-/**
- * @Description: html字符串转换实体
- * @param s
- * @return string
- */
-func HtmlEncode(s string) string {
-	return html.EscapeString(s)
-}
-
-/**
- * @Description: html实体字符串还原
- * @param s
- * @return string
- */
-func HtmlDecode(s string) string {
-	return html.UnescapeString(s)
-}
-
-/**
- * @Description: GET请求,支持gzip
- * @param u 网址
- * @return string
- */
-func Get(u string) string {
-	rs, _ := http.Get(u)
-	defer rs.Body.Close()
-	body, _ := io.ReadAll(rs.Body)
-	t := string(body)
-	if IsGBK(body) {
-		return Gbk2Utf8(t)
-	}
-	return t
-}
-
-// table转换成数组
-func TableArr(s string) [][]string {
-	re := regexp.MustCompile("<table[^>]*?>")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile("<tbody[^>]*?>")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile("<tr[^>]*?>")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile("<td[^>]*?>")
-	s = re.ReplaceAllString(s, "")
-	s = strings.Replace(s, "</tr>", "{tr}", -1)
-	s = strings.Replace(s, "</td>", "{td}", -1)
-	re = regexp.MustCompile("<[/!]*?[^<>]*?>")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile("([rn])[s]+")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile("&nbsp;")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile("</tbody>")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile("</table>")
-	s = re.ReplaceAllString(s, "")
-	re = regexp.MustCompile(`\s{2,}`)
-	s = re.ReplaceAllString(s, "")
-	s = strings.Replace(s, " ", "", -1)
-	s = strings.Replace(s, "	", "", -1)
-	s = strings.Replace(s, "\r", "", -1)
-	s = strings.Replace(s, "\t", "", -1)
-	s = strings.Replace(s, "\n", "", -1)
-	arr := strings.Split(s, "{tr}")
-	arr = arr[:len(arr)-1]
-	var arr1 [][]string
-	for _, v := range arr {
-		arr2 := strings.Split(v, "{td}")
-		arr2 = arr2[:len(arr2)-1]
-		arr1 = append(arr1, arr2)
-	}
-	return arr1
-}
-
-var aes128 = []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
-var aes192 = []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-}
-var aes256 = []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-}
-
-/**
- * @Description: Aes加密
- * @param text
- * @param key ,分别代表AES-128, AES-192和 AES-256
- * @return string
- * @return error
- */
-func AesEn(text string, k string) (string, error) {
-	var key []byte
-	switch k {
-	case "aes128":
-		key = aes128
-	case "aes192":
-		key = aes192
-	case "aes256":
-		key = aes256
-	}
-	var iv = key[:aes.BlockSize]
-	encrypted := make([]byte, len(text))
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	encrypter := cipher.NewCFBEncrypter(block, iv)
-	encrypter.XORKeyStream(encrypted, []byte(text))
-	return hex.EncodeToString(encrypted), nil
-}
-
-// aes解密 支持aes128 aes192 aes256
-func AesDe(encrypted string, k string) (string, error) {
-	var key []byte
-	switch k {
-	case "aes128":
-		key = aes128
-	case "aes192":
-		key = aes192
-	case "aes256":
-		key = aes256
-	}
-	var err error
-	defer func() {
-		if e := recover(); e != nil {
-			err = e.(error)
-		}
-	}()
-	src, err := hex.DecodeString(encrypted)
-	if err != nil {
-		return "", err
-	}
-	var iv = key[:aes.BlockSize]
-	decrypted := make([]byte, len(src))
-	var block cipher.Block
-	block, err = aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", err
-	}
-	decrypter := cipher.NewCFBDecrypter(block, iv)
-	decrypter.XORKeyStream(decrypted, src)
-	return string(decrypted), nil
-}
-
-var (
-	// DefaultTrimChars are the characters which are stripped by Trim* functions in default.
-	DefaultTrimChars = string([]byte{
-		'\t', // Tab.
-		'\v', // Vertical tab.
-		'\n', // New line (line feed).
-		'\r', // Carriage return.
-		'\f', // New page.
-		' ',  // Ordinary space.
-		0x00, // NUL-byte.
-		0x85, // Delete.
-		0xA0, // Non-breaking space.
-	})
-)
-
-// 开头结尾去除空格或指定字符
-func Trim(str string, characterMask ...string) string {
-	trimChars := DefaultTrimChars
-
-	if len(characterMask) > 0 {
-		trimChars += characterMask[0]
-	}
-
-	return strings.Trim(str, trimChars)
-}
-
-// SplitStr
-//
-//	@Description: 切割字符串为scile
-//	@param str
-//	@param delimiter 切割符号
-//	@param characterMask 去除空格或其他
-//	@return []string
-func SplitStr(str, delimiter string, characterMask ...string) []string {
-	result := make([]string, 0)
-
-	for _, v := range strings.Split(str, delimiter) {
-		v = Trim(v, characterMask...)
-		if v != "" {
-			result = append(result, v)
-		}
-	}
-
-	return result
-}
-
-// HideString
-//
-//	@Description: 隐藏字符串特定位置
-//	@param origin
-//	@param start
-//	@param end
-//	@param replaceChar
-//	@return string
-func HideString(origin string, start, end int, replaceChar string) string {
-	size := len(origin)
-
-	if start > size-1 || start < 0 || end < 0 || start > end {
-		return origin
-	}
-
-	if end > size {
-		end = size
-	}
-
-	if replaceChar == "" {
-		return origin
-	}
-
-	startStr := origin[0:start]
-	endStr := origin[end:size]
-
-	replaceSize := end - start
-	replaceStr := strings.Repeat(replaceChar, replaceSize)
-
-	return startStr + replaceStr + endStr
-}
-
-/**
- * @Description: 隐藏手机中间四位或电话中间四位
- * @param phone 手机号 182XXXX7788
- * @return str
- */
-func HideTel(phone string) (str string) {
-	return HideString(phone, 3, 7, "*")
-}
-
-// 获取汉字拼音,支持返回全拼音和拼音首字母,同时支持sp分隔符 php.GetPinyin(s,"")
-func GetPinyin(s, sp string) (pinyin, shortpinyin string) {
-	n := utf8.RuneCountInString(s)
-	var list []string
-	for i := 0; i < n; i++ {
-		list = append(list, Substring(s, i, 1))
-	}
-	for _, v := range list {
-		pin, isok := dict[v]
-		if isok {
-			pinyin += pin + sp
-			shortpinyin += Substring(pin, 0, 1)
-		} else {
-			pinyin += v
-			shortpinyin += Substring(v, 0, 1)
-		}
-
-	}
-	return pinyin, shortpinyin
-}
-
-// utf82unicode
-// @Description: utf8转换unnicode
-// @param str
-// @return string unicode
-func Utf82unicode(str string) string {
-	str1 := strconv.QuoteToASCII(str)
-	return str1[1 : len(str1)-1]
-}
-
-// unicode2utf8
-// @Description: unicode转换utf8
-// @param str
-// @return string utf8
-func Unicode2utf8(str string) string {
-	str1, _ := strconv.Unquote(strings.Replace(strconv.Quote(str), `\\u`, `\u`, -1))
-	return str1
 }

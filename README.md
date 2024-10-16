@@ -97,7 +97,7 @@ r := rest.New()
 github.com/logoove/go/yo
 
 一些常见的函数,参考了php,泛型,还有一些流行的库,放在了一起方便使用.原来的php名称废弃.
-例如,返回时间戳: fmt.Print(yo.Time())
+例如,返回时间戳: fmt.Print(yo.Timestamp())
 
 处理scile的foreach
 ~~~
