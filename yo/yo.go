@@ -34,9 +34,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 )
 
 type Signed interface {
@@ -97,10 +99,11 @@ var timeFormat = MapStrStr{
 	"mm:ss":               "04:05",
 }
 var (
-	factor = [17]int{7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2}
-	verifyStr = [11]string{"1", "0", "X", "9", "8", "7", "6", "5", "4", "3", "2"}
+	factor         = [17]int{7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2}
+	verifyStr      = [11]string{"1", "0", "X", "9", "8", "7", "6", "5", "4", "3", "2"}
 	birthStartYear = 1900
-provinceKv = map[string]struct{}{ "11": {}, "12": {}, "13": {}, "14": {}, "15": {}, "21": {}, "22": {}, "23": {}, "31": {}, "32": {}, "33": {}, "34": {}, "35": {}, "36": {}, "37": {}, "41": {}, "42": {}, "43": {}, "44": {}, "45": {}, "46": {}, "50": {}, "51": {}, "52": {}, "53": {}, "54": {}, "61": {}, "62": {}, "63": {}, "64": {}, "65": {}, "71": {}, "81": {}, "82": {}, } )
+	provinceKv     = map[string]struct{}{"11": {}, "12": {}, "13": {}, "14": {}, "15": {}, "21": {}, "22": {}, "23": {}, "31": {}, "32": {}, "33": {}, "34": {}, "35": {}, "36": {}, "37": {}, "41": {}, "42": {}, "43": {}, "44": {}, "45": {}, "46": {}, "50": {}, "51": {}, "52": {}, "53": {}, "54": {}, "61": {}, "62": {}, "63": {}, "64": {}, "65": {}, "71": {}, "81": {}, "82": {}}
+)
 var (
 	chineseMatcher       *regexp.Regexp = regexp.MustCompile("[\u4e00-\u9fa5]")
 	base64Matcher        *regexp.Regexp = regexp.MustCompile(`^(?:[A-Za-z0-9+\\/]{4})*(?:[A-Za-z0-9+\\/]{2}==|[A-Za-z0-9+\\/]{3}=|[A-Za-z0-9+\\/]{4})$`)
@@ -111,6 +114,7 @@ var (
 	hexMatcher           *regexp.Regexp = regexp.MustCompile(`^(#|0x|0X)?[0-9a-fA-F]+$`)
 	urlMatcher           *regexp.Regexp = regexp.MustCompile(`^((ftp|http|https?):\/\/)?(\S+(:\S*)?@)?((([1-9]\d?|1\d\d|2[01]\d|22[0-3])(\.(1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.([0-9]\d?|1\d\d|2[0-4]\d|25[0-4]))|(([a-zA-Z0-9]+([-\.][a-zA-Z0-9]+)*)|((www\.)?))?(([a-z\x{00a1}-\x{ffff}0-9]+-?-?)*[a-z\x{00a1}-\x{ffff}0-9]+)(?:\.([a-z\x{00a1}-\x{ffff}]{2,}))?))(:(\d{1,5}))?((\/|\?|#)[^\s]*)?$`)
 )
+
 // Assign[K comparable, V any, Map ~map[K]V]
 //
 //	@Description: 合并map
@@ -3712,7 +3716,7 @@ func UniqBy[T any, U comparable, Slice ~[]T](collection Slice, iteratee func(ite
 //	@return []byte
 //	@return error
 func Utf8ToGbk(bs []byte) []byte {
-	b, _ :=GBK.NewEncoder().Bytes(bs)
+	b, _ := GBK.NewEncoder().Bytes(bs)
 	return b
 }
 
@@ -4172,4 +4176,57 @@ func CliYesNo(question string) bool {
 			fmt.Printf(confirmRejection)
 		}
 	}
+}
+
+// GetProcessName
+//
+//	@Description: 根据进程pid返回进程名称,此函数用于win,可以用来判断是否双击打开exe
+//
+// GetProcessName(os.Getppid()) == "explorer.exe" 是双击
+// GetProcessName(os.Getpid()) 当前程序名称
+//
+//	@param pid
+//	@return string
+func GetProcessName(pid int) string {
+	snapshot, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return ""
+	}
+	defer syscall.CloseHandle(snapshot)
+	var procEntry syscall.ProcessEntry32
+	procEntry.Size = uint32(unsafe.Sizeof(procEntry))
+	if err = syscall.Process32First(snapshot, &procEntry); err != nil {
+		return ""
+	}
+	for {
+		if procEntry.ProcessID == uint32(pid) {
+			return syscall.UTF16ToString(procEntry.ExeFile[:])
+		}
+		err = syscall.Process32Next(snapshot, &procEntry)
+		if err != nil {
+			return ""
+		}
+	}
+}
+
+// Openurl
+//
+//	@Description: 打开URL
+//	@param url
+func Openurl(url string) {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start"}
+	case "darwin":
+		cmd = "open"
+	default:
+		cmd = "xdg-open"
+	}
+	args = append(args, url)
+	cmds := exec.Command(cmd, args...)
+	cmds.Start()
 }

@@ -1,5 +1,22 @@
 ### golang工具包,包含路由,命令工具,函数库,sqlite
+### 常用工具函数包
 
+github.com/logoove/go/yo
+
+一些常见的函数,参考了php,泛型,还有一些流行的库,放在了一起方便使用.原来的php名称废弃.
+例如,返回时间戳: fmt.Print(yo.Timestamp())
+
+处理scile的foreach
+~~~
+nums := []int{1, 9, 3, 7, 5}
+    var rx []int
+    yo.ForEach(nums, func(k int, v int) {
+        rx = append(rx, v+1)
+    })
+    fmt.Println(rx)
+~~~
+### ico编码解码
+github.com/logoove/go/ico
 ### 命令行程序包
 github.com/logoove/go/cli
 
@@ -92,22 +109,7 @@ r := rest.New()
 	r.Run("0.0.0.0:8080")
 }
 ```
-### 常用工具函数包
 
-github.com/logoove/go/yo
-
-一些常见的函数,参考了php,泛型,还有一些流行的库,放在了一起方便使用.原来的php名称废弃.
-例如,返回时间戳: fmt.Print(yo.Timestamp())
-
-处理scile的foreach
-~~~
-nums := []int{1, 9, 3, 7, 5}
-    var rx []int
-    yo.ForEach(nums, func(k int, v int) {
-        rx = append(rx, v+1)
-    })
-    fmt.Println(rx)
-~~~
 
 ### goframe2.0以上版本驱动包
 
