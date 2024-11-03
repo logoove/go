@@ -4208,25 +4208,3 @@ func GetProcessName(pid int) string {
 		}
 	}
 }
-
-// Openurl
-//
-//	@Description: 打开URL
-//	@param url
-func Openurl(url string) {
-	var cmd string
-	var args []string
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start"}
-	case "darwin":
-		cmd = "open"
-	default:
-		cmd = "xdg-open"
-	}
-	args = append(args, url)
-	cmds := exec.Command(cmd, args...)
-	cmds.Start()
-}
