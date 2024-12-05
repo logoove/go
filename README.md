@@ -17,6 +17,14 @@ nums := []int{1, 9, 3, 7, 5}
 ~~~
 ### ico编码解码
 github.com/logoove/go/ico
+### test windows下生成带图标exe和系统信息
+github.com/logoove/go/test 下面代码放入main.go的main函数中, 生成的exe文件运行, 就会创建rsrc_amd64.syso, 文件, 此时再次编译就会生成小文件带图标,只要syso存在就能自动编译到exe, 删除要重新生成.
+编译小文件不带cmd `go build -ldflags "-s -w -H windowsgui"`
+~~~
+//go:embed icon.ico
+var p []byte
+rsrc(p,"xvgui for GUI", "1.0.0.1", "cn", "Yoby工作室", "一个开源GUI工具", "xvgui.exe", "Yoby")
+~~~
 ### 命令行程序包
 github.com/logoove/go/cli
 
